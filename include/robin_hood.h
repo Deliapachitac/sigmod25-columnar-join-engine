@@ -1,5 +1,7 @@
 #include <iostream>
 #include <vector>
+#include <iterator>
+#include <cstddef>  
 #define FNV_offset32 ((uint32_t) 2166136261)
 #define FNV_offset64 ((uint64_t) 14695981039346656037)
 #define FNV_prime32  ((uint32_t) 16777619)
@@ -16,11 +18,11 @@ struct data {
 
 template<typename T1, typename T2> 
 class RobinHoodHash{
-
     private:
-
     static constexpr size_t DEFAULT_CAPACITY = 16; 
     static constexpr float REHASH_LOAD = 0.75;
+    //Store keys in another vector
+    std::vector<T1> keys;
     //Hashtable buckets, they are of type node
     std::vector<data<T2>> b;
     size_t capacity;
@@ -64,8 +66,54 @@ class RobinHoodHash{
     }
 
     public:
+    struct Iterator{
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = std::pair<T1,T2>;
+        using pointer = value_type*;
+        using reference = value_type&;
+        
+        RobinHoodHash* table;
+        size_t index;
 
-    RobinHoodHash(size_t size) : b(size), capacity(size){}
+        Iterator(RobinHoodHash* tbl, size_t idx) : table(tbl), index(idx) {
+            skip_empty();
+        }
+
+        void skip_empty() {
+            while (index < table->b.size() && table->b[index].is_empty) 
+                ++index;
+        }
+        
+        value_type operator*() const{ 
+            return {table->keys[index], table->b[index].v}; 
+        }
+
+        Iterator& operator++() { 
+            ++index;
+            skip_empty();
+            return *this;
+        }
+
+        Iterator operator++(int) { 
+            Iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+
+        friend bool operator==(const Iterator& a, const Iterator& b) {
+            return a.table == b.table && a.index == b.index;
+        }
+        friend bool operator!=(const Iterator& a, const Iterator& b) {
+            return !(a == b);
+        }
+    }
+    RobinHoodHash(size_t size) : b((size/REHASH_LOAD)+1), capacity((size/REHASH_LOAD)+1){}
     RobinHoodHash() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY){}
-
+    Iterator begin() {
+        return Iterator(this,0);
+    }
+    Iterator end(){
+        return Iterator(this,b.size());
+    }
 };
