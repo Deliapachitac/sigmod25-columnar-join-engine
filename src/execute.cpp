@@ -176,13 +176,11 @@ ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
 
 ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     namespace views = ranges::views;
-    RobinHoodHash<int,int> RH;
     auto ret        = execute_impl(plan, plan.root);
     auto ret_types  = plan.nodes[plan.root].output_attrs
                    | views::transform([](const auto& v) { return std::get<1>(v); })
                    | ranges::to<std::vector<DataType>>();
     Table table{std::move(ret), std::move(ret_types)};
-    RH.Hello_there();
     return table.to_columnar();
 }
 

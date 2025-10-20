@@ -17,7 +17,7 @@ struct data {
 };
 
 template<typename T1, typename T2> 
-class RobinHoodHash{
+class rh_map{
     private:
     static constexpr size_t DEFAULT_CAPACITY = 16; 
     static constexpr float REHASH_LOAD = 0.75;
@@ -77,10 +77,10 @@ class RobinHoodHash{
         using pointer = value_type*;
         using reference = value_type&;
         
-        RobinHoodHash* table;
+        rh_map* table;
         size_t index;
 
-        Iterator(RobinHoodHash* tbl, size_t idx) : table(tbl), index(idx) {
+        Iterator(rh_map* tbl, size_t idx) : table(tbl), index(idx) {
             skip_empty();
         }
 
@@ -111,9 +111,11 @@ class RobinHoodHash{
         friend bool operator!=(const Iterator& a, const Iterator& b) {
             return !(a == b);
         }
-    }
-    RobinHoodHash(size_t size) : b((size/REHASH_LOAD)+1), capacity((size/REHASH_LOAD)+1){}
-    RobinHoodHash() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY){}
+    };
+    public:
+    //If size is given, then
+    rh_map(size_t size) : b(static_cast<size_t>(size/REHASH_LOAD)+1), capacity(static_cast<size_t>(size/REHASH_LOAD)+1), keys(static_cast<size_t>(size/REHASH_LOAD)+1){}
+    rh_map() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY),keys(DEFAULT_CAPACITY){}
     Iterator begin() {
         return Iterator(this,0);
     }
@@ -121,85 +123,102 @@ class RobinHoodHash{
         return Iterator(this,b.size());
     }
     std::pair<Iterator , bool> emplace(const T1& key, const T2& value){
-        return this.insert({key, value});
+        return this->insert({key, value});
     }
     //Inserts a key to the hashmap
     //Return a pair, the first value is an iterator where we inserted the key, or one past the end if the key was already in the map,
     //and a bool that signals if the operation was successful
     std::pair<Iterator , bool> insert(std::pair<T1,T2>& values){
-        T1 key = values->first;
-        T2 v = values->second;
+        T1 key = values.first;
+        T2 v = values.second;
         int32_t inserted_index;
         float load_factor = float(entries)/capacity;
-        if(load_factor >= this.REHASH_LOAD){
-            this.Rehash();
+        if(load_factor >= this->REHASH_LOAD){
+            this->Rehash();
         }
-        auto index = this.HashFunction(key);
+        auto index = this->HashFunction(key);
         //If the index bucket is empty insert there, otherwise insert elsewhere
-        if(this.b[index].is_empty){
-            this.entries++;
-            this.b[index].is_empty = false;
-            this.b[index].psl = 0;
-            this.b[index].v = v;
-            this.keys[index] = key;
+        if(this->b[index].is_empty){
+            this->entries++;
+            this->b[index].is_empty = false;
+            this->b[index].psl = 0;
+            this->b[index].v = v;
+            this->keys[index] = key;
             return { Iterator(this,index) , true };
         }
         //This means we have a colission
-        else{
-            bool flag = true;
-            size_t psl = 1;
-            while(true){
-                //Hashmap wraps around when at the end of the vector
-                index = (index + 1) % capacity;
-                if(this.b[index].is_empty){
-                    if(flag){
-                        inserted_index = index;
-                        flag = false;
-                    }
-                    this.entries++;
-                    this.b[index].is_empty = false;
-                    this.b[index].psl = psl;
-                    this.b[index].v = v;
-                    this.keys[index] = key;
-                    break;
+        bool flag = true;
+        size_t psl = 1;
+        while(true){
+            //Hashmap wraps around when at the end of the vector
+            index = (index + 1) % capacity;
+            if(this->b[index].is_empty){
+                if(flag){
+                    inserted_index = index;
+                    flag = false;
                 }
-                else if(this.key[index] == key){
-                    return { Iterator(this,b.size()), false };
-                }
-                else if(this.b[index].psl < psl){
-                    //We may go through this step multiple times, we make sure we return the right index
-                    if(flag){
-                        inserted_index = index;
-                        flag = false;
-                    }
-                    auto tmp_key = this.keys[index];
-                    auto tmp_v = this.b[index].v;
-                    auto tmp_psl = this.b[index].psl;
-                    this.keys[index] = key;
-                    this.b[index].v = v;
-                    this.b[index].psl = psl;
-                    key = tmp_key;
-                    psl = tmp_psl;
-                    v = tmp_v;
-                }
-                psl++;
+                this->entries++;
+                this->b[index].is_empty = false;
+                this->b[index].psl = psl;
+                this->b[index].v = v;
+                this->keys[index] = key;
+                break;
             }
-            return {Iterator(this,inserted_index), true};
+            else if(this->keys[index] == key){
+                return { Iterator(this,index), false };
+            }
+            else if(this->b[index].psl < psl){
+                //We may go through this step multiple times, we make sure we return the right index
+                if(flag){
+                    inserted_index = index;
+                    flag = false;
+                }
+                std::swap(this->keys[index], key);
+                std::swap(this->b[index].v, v);
+                std::swap(this->b[index].psl, psl);
+            }
+            psl++;
         }
+        return {Iterator(this,inserted_index), true};
+        
     }
     //Searches for the value with the given key, returns iterator at the desired value or iterator one past the last index
     Iterator find(const T1& key){
-        int32_t index = this.HashFunction(key);
-        while (true){
-            if(this.key[index] == key){
+        int32_t index = this->HashFunction(key);
+        size_t start = index;
+        size_t psl = 0;
+        do {
+            if(this->keys[index] == key)
                 return Iterator(this,index);
-            }
+
             //If empty slot is found before finding the key, this means the key is not in the map
-            else if(this.b[index].is_empty){
-                return Iterator(this,b.size());
-            }
+            if(this->b[index].is_empty)
+                break;
+            // early stop
+            if (this->b[index].psl < psl) 
+                break;  
+
             //Wrap around the vector
             index = (index + 1) % capacity;
-        } 
+            psl++;
+        }while (index != start);
+        return Iterator(this, b.size()); 
+    }
+    size_t empty(){
+        return this->entries == 0;
+    }
+    size_t size(){
+        return this->capacity;
+    }
+    //Helper functions for unit tests, they don't search with keys but with index
+    //TODO: Make them return unique if bucket is empty
+    bool get_is_empty(int32_t i){
+        return this->b[i].is_empty;
+    }
+    size_t get_psl(int32_t i){
+        return this->b[i].psl;
+    }
+    T2 get_v(int32_t i){
+        return this->b[i].v;
     }
 };
