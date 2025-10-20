@@ -22,7 +22,7 @@ TEST_CASE("Size specified Hashmap constructor", "[robin_hood]"){
     }
 }
 
-//Tests if insert works
+//Tests if insert works, emplace just uses insert internally so we use this
 
 TEST_CASE("Insert element", "[robin_hood]"){
     rh_map<int32_t,int32_t> rh;
@@ -50,4 +50,22 @@ TEST_CASE("Insert element", "[robin_hood]"){
     REQUIRE(found == ground_truth);
     auto result = rh.emplace(1,100);
     REQUIRE(result.second == false);
+}
+
+TEST_CASE("Find element", "[robin_hood]"){
+    rh_map<int32_t,int32_t> rh;
+    rh.emplace(1,20);
+    rh.emplace(2,21);
+    rh.emplace(3,22);
+    rh.emplace(4,23);
+    rh.emplace(5,24);
+    rh.emplace(6,25);
+    rh.emplace(7,26);
+    rh.emplace(8,27);
+    rh.emplace(9,28);
+    auto it = rh.find(1);
+    REQUIRE(it->second == 20);
+    REQUIRE(it->first == 1);
+    it = rh.find(10);
+    REQUIRE(it == rh.end());
 }

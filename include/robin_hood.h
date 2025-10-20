@@ -1,30 +1,29 @@
 #include <iostream>
 #include <vector>
 #include <iterator>
+#include <climits>
 #include <cstddef>  
 #define FNV_offset32 ((uint32_t) 2166136261)
 #define FNV_offset64 ((uint64_t) 14695981039346656037)
 #define FNV_prime32  ((uint32_t) 16777619)
 #define FNV_prime64  ((uint64_t) 1099511628211)
-template<typename T> 
-struct data {
-    //Probe sequence length
-    size_t psl;
-    // Value is of type T
-    T v; 
-    //Flag to note that the bucket is empty
-    bool is_empty = true;
-};
+
 
 template<typename T1, typename T2> 
 class rh_map{
     private:
+    struct data {
+        //Probe sequence length
+        size_t psl;
+        //Pair holding kay and value, we use pair so we can have a correct iterator
+        std::pair<T1,T2> kv;
+        //Flag to note that the bucket is empty
+        bool is_empty = true;
+    };
     static constexpr size_t DEFAULT_CAPACITY = 16; 
     static constexpr float REHASH_LOAD = 0.75;
-    //Store keys in another vector
-    std::vector<T1> keys;
     //Hashtable buckets, they are of type node
-    std::vector<data<T2>> b;
+    std::vector<data> b;
     size_t capacity;
     size_t entries = 0;
     //We know that the possible types of data, so we hash depending on what data we have.
@@ -46,7 +45,7 @@ class rh_map{
         }
         return hash;
     }
-    uint64_t FNV1a_str(const std::string key){
+    uint64_t FNV1a_str(const std::string& key){
         uint64_t hash = FNV_offset64;
         for(char byte: key){
             hash^=static_cast<uint8_t>(byte);
@@ -89,9 +88,8 @@ class rh_map{
                 ++index;
         }
         
-        value_type operator*() const{ 
-            return {table->keys[index], table->b[index].v}; 
-        }
+        value_type& operator*() const { return table->b[index].kv; }
+        value_type* operator->() const { return &table->b[index].kv; }
 
         Iterator& operator++() { 
             ++index;
@@ -114,8 +112,8 @@ class rh_map{
     };
     public:
     //If size is given, then
-    rh_map(size_t size) : b(static_cast<size_t>(size/REHASH_LOAD)+1), capacity(static_cast<size_t>(size/REHASH_LOAD)+1), keys(static_cast<size_t>(size/REHASH_LOAD)+1){}
-    rh_map() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY),keys(DEFAULT_CAPACITY){}
+    rh_map(size_t size) : b(static_cast<size_t>(size/REHASH_LOAD)+1), capacity(static_cast<size_t>(size/REHASH_LOAD)+1){}
+    rh_map() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY){}
     Iterator begin() {
         return Iterator(this,0);
     }
@@ -128,22 +126,20 @@ class rh_map{
     //Inserts a key to the hashmap
     //Return a pair, the first value is an iterator where we inserted the key, or one past the end if the key was already in the map,
     //and a bool that signals if the operation was successful
-    std::pair<Iterator , bool> insert(std::pair<T1,T2>& values){
-        T1 key = values.first;
-        T2 v = values.second;
+    std::pair<Iterator , bool> insert(const std::pair<T1,T2>& values){
         int32_t inserted_index;
+        std::pair<T1,T2> kv = values;
         float load_factor = float(entries)/capacity;
         if(load_factor >= this->REHASH_LOAD){
             this->Rehash();
         }
-        auto index = this->HashFunction(key);
+        auto index = this->HashFunction(kv.first);
         //If the index bucket is empty insert there, otherwise insert elsewhere
         if(this->b[index].is_empty){
             this->entries++;
             this->b[index].is_empty = false;
             this->b[index].psl = 0;
-            this->b[index].v = v;
-            this->keys[index] = key;
+            this->b[index].kv = kv;
             return { Iterator(this,index) , true };
         }
         //This means we have a colission
@@ -160,11 +156,11 @@ class rh_map{
                 this->entries++;
                 this->b[index].is_empty = false;
                 this->b[index].psl = psl;
-                this->b[index].v = v;
-                this->keys[index] = key;
+                this->b[index].kv = kv;
                 break;
             }
-            else if(this->keys[index] == key){
+            //Check if key is already in map
+            else if(/*key*/ this->b[index].kv.first == kv.first){
                 return { Iterator(this,index), false };
             }
             else if(this->b[index].psl < psl){
@@ -173,8 +169,7 @@ class rh_map{
                     inserted_index = index;
                     flag = false;
                 }
-                std::swap(this->keys[index], key);
-                std::swap(this->b[index].v, v);
+                std::swap(this->b[index].kv, kv);
                 std::swap(this->b[index].psl, psl);
             }
             psl++;
@@ -188,7 +183,7 @@ class rh_map{
         size_t start = index;
         size_t psl = 0;
         do {
-            if(this->keys[index] == key)
+            if(this->b[index].kv.first == key)
                 return Iterator(this,index);
 
             //If empty slot is found before finding the key, this means the key is not in the map
@@ -204,21 +199,27 @@ class rh_map{
         }while (index != start);
         return Iterator(this, b.size()); 
     }
-    size_t empty(){
+    bool empty() const{
         return this->entries == 0;
     }
-    size_t size(){
-        return this->capacity;
+    size_t size() const{
+        return this->entries;
     }
+    size_t get_capacity() const {
+        return this->capacity;
+    }   
     //Helper functions for unit tests, they don't search with keys but with index
     //TODO: Make them return unique if bucket is empty
-    bool get_is_empty(int32_t i){
+    bool get_is_empty(int32_t i) const{
         return this->b[i].is_empty;
     }
-    size_t get_psl(int32_t i){
+    size_t get_psl(int32_t i) const{
+        if(this->b[i].is_empty){
+            return std::numeric_limits<signed_t>::max();
+        }
         return this->b[i].psl;
     }
-    T2 get_v(int32_t i){
-        return this->b[i].v;
+    T2 get_v(int32_t i) const{
+        return this->b[i].kv.second;
     }
 };
