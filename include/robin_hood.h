@@ -9,7 +9,7 @@
 template<typename T> 
 struct data {
     //Probe sequence length
-    size_t PSL;
+    size_t psl;
     // Value is of type T
     T v; 
     //Flag to note that the bucket is empty
@@ -26,6 +26,7 @@ class RobinHoodHash{
     //Hashtable buckets, they are of type node
     std::vector<data<T2>> b;
     size_t capacity;
+    size_t entries = 0;
     //We know that the possible types of data, so we hash depending on what data we have.
     uint32_t FNV1a_32(const int32_t key){
         uint32_t hash = FNV_offset32;
@@ -64,7 +65,10 @@ class RobinHoodHash{
             return FNV1a_str(key) % capacity;
         }
     }
-
+    //TODO: Implement rehash
+    void Rehash(){
+        return;
+    }
     public:
     struct Iterator{
         using iterator_category = std::forward_iterator_tag;
@@ -115,5 +119,87 @@ class RobinHoodHash{
     }
     Iterator end(){
         return Iterator(this,b.size());
+    }
+    std::pair<Iterator , bool> emplace(const T1& key, const T2& value){
+        return this.insert({key, value});
+    }
+    //Inserts a key to the hashmap
+    //Return a pair, the first value is an iterator where we inserted the key, or one past the end if the key was already in the map,
+    //and a bool that signals if the operation was successful
+    std::pair<Iterator , bool> insert(std::pair<T1,T2>& values){
+        T1 key = values->first;
+        T2 v = values->second;
+        int32_t inserted_index;
+        float load_factor = float(entries)/capacity;
+        if(load_factor >= this.REHASH_LOAD){
+            this.Rehash();
+        }
+        auto index = this.HashFunction(key);
+        //If the index bucket is empty insert there, otherwise insert elsewhere
+        if(this.b[index].is_empty){
+            this.entries++;
+            this.b[index].is_empty = false;
+            this.b[index].psl = 0;
+            this.b[index].v = v;
+            this.keys[index] = key;
+            return { Iterator(this,index) , true };
+        }
+        //This means we have a colission
+        else{
+            bool flag = true;
+            size_t psl = 1;
+            while(true){
+                //Hashmap wraps around when at the end of the vector
+                index = (index + 1) % capacity;
+                if(this.b[index].is_empty){
+                    if(flag){
+                        inserted_index = index;
+                        flag = false;
+                    }
+                    this.entries++;
+                    this.b[index].is_empty = false;
+                    this.b[index].psl = psl;
+                    this.b[index].v = v;
+                    this.keys[index] = key;
+                    break;
+                }
+                else if(this.key[index] == key){
+                    return { Iterator(this,b.size()), false };
+                }
+                else if(this.b[index].psl < psl){
+                    //We may go through this step multiple times, we make sure we return the right index
+                    if(flag){
+                        inserted_index = index;
+                        flag = false;
+                    }
+                    auto tmp_key = this.keys[index];
+                    auto tmp_v = this.b[index].v;
+                    auto tmp_psl = this.b[index].psl;
+                    this.keys[index] = key;
+                    this.b[index].v = v;
+                    this.b[index].psl = psl;
+                    key = tmp_key;
+                    psl = tmp_psl;
+                    v = tmp_v;
+                }
+                psl++;
+            }
+            return {Iterator(this,inserted_index), true};
+        }
+    }
+    //Searches for the value with the given key, returns iterator at the desired value or iterator one past the last index
+    Iterator find(const T1& key){
+        int32_t index = this.HashFunction(key);
+        while (true){
+            if(this.key[index] == key){
+                return Iterator(this,index);
+            }
+            //If empty slot is found before finding the key, this means the key is not in the map
+            else if(this.b[index].is_empty){
+                return Iterator(this,b.size());
+            }
+            //Wrap around the vector
+            index = (index + 1) % capacity;
+        } 
     }
 };
