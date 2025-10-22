@@ -8,7 +8,6 @@
 #define FNV_prime32  ((uint32_t) 16777619)
 #define FNV_prime64  ((uint64_t) 1099511628211)
 
-
 template<typename T1, typename T2> 
 class rh_map{
     private:
@@ -215,7 +214,7 @@ class rh_map{
     }
     size_t get_psl(int32_t i) const{
         if(this->b[i].is_empty){
-            return std::numeric_limits<signed_t>::max();
+            return std::numeric_limits<size_t>::max();
         }
         return this->b[i].psl;
     }
