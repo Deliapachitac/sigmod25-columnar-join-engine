@@ -3,10 +3,10 @@
 #include <iterator>
 #include <climits>
 #include <cstddef>  
-#define FNV_offset32 ((uint32_t) 2166136261)
-#define FNV_offset64 ((uint64_t) 14695981039346656037)
-#define FNV_prime32  ((uint32_t) 16777619)
-#define FNV_prime64  ((uint64_t) 1099511628211)
+#define FNV_offset32 ((uint32_t) 2166136261U)
+#define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
+#define FNV_prime32  ((uint32_t) 16777619U)
+#define FNV_prime64  ((uint64_t) 1099511628211ULL)
 
 template<typename T1, typename T2> 
 class rh_map{
@@ -52,7 +52,7 @@ class rh_map{
         }
         return hash;
     }
-    int32_t HashFunction(T1 key) {
+    size_t HashFunction(T1 key) {
         if constexpr (std::is_same_v<T1, int32_t>) {
             return FNV1a_32(key) % capacity;
         } else if constexpr (std::is_same_v<T1, int64_t>) {
@@ -63,8 +63,10 @@ class rh_map{
             return FNV1a_str(key) % capacity;
         }
     }
+
     //TODO: Implement rehash
     void Rehash(){
+        std:: cout <<"Hello I am here:)"<<"\n";
         return;
     }
     public:
@@ -126,7 +128,11 @@ class rh_map{
     //Return a pair, the first value is an iterator where we inserted the key, or one past the end if the key was already in the map,
     //and a bool that signals if the operation was successful
     std::pair<Iterator , bool> insert(const std::pair<T1,T2>& values){
-        int32_t inserted_index;
+        Iterator findRes = this->find(values.first);
+        if(findRes != this->end()){
+            return { findRes, false };
+        }
+        
         std::pair<T1,T2> kv = values;
         float load_factor = float(entries)/capacity;
         if(load_factor >= this->REHASH_LOAD){
@@ -144,6 +150,7 @@ class rh_map{
         //This means we have a colission
         bool flag = true;
         size_t psl = 1;
+        int32_t inserted_index = index;
         while(true){
             //Hashmap wraps around when at the end of the vector
             index = (index + 1) % capacity;
@@ -158,6 +165,7 @@ class rh_map{
                 this->b[index].kv = kv;
                 break;
             }
+            
             //Check if key is already in map
             else if(/*key*/ this->b[index].kv.first == kv.first){
                 return { Iterator(this,index), false };
@@ -178,16 +186,17 @@ class rh_map{
     }
     //Searches for the value with the given key, returns iterator at the desired value or iterator one past the last index
     Iterator find(const T1& key){
-        int32_t index = this->HashFunction(key);
+        size_t index = this->HashFunction(key);
         size_t start = index;
         size_t psl = 0;
         do {
-            if(this->b[index].kv.first == key)
-                return Iterator(this,index);
-
             //If empty slot is found before finding the key, this means the key is not in the map
             if(this->b[index].is_empty)
                 break;
+
+            if(this->b[index].kv.first == key)
+                return Iterator(this,index);
+
             // early stop
             if (this->b[index].psl < psl) 
                 break;  
