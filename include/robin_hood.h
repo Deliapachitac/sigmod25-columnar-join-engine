@@ -96,7 +96,15 @@ class rh_map{
     }
     //TODO: Implement rehash
     void Rehash(){
-        return;
+        this->capacity *= 2;
+        std::vector<data> old_b = this->b;
+        this->b = std::vector<data>(this->capacity);
+        
+        for ( auto &item : old_b){
+            if(!item.is_empty){
+                this->insert (item.kv);
+            }
+        }
     }
     public:
     struct Iterator{
