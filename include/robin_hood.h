@@ -3,6 +3,7 @@
 #include <iterator>
 #include <climits>
 #include <cstddef>  
+#include <cmath>
 #define FNV_offset32 ((uint32_t) 2166136261U)
 #define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
 #define FNV_prime32  ((uint32_t) 16777619U)
@@ -54,19 +55,47 @@ class rh_map{
     }
     size_t HashFunction(T1 key) {
         if constexpr (std::is_same_v<T1, int32_t>) {
-            return FNV1a_32(key) % capacity;
+            return FNV1a_32(key) & (capacity-1);
         } else if constexpr (std::is_same_v<T1, int64_t>) {
-            return FNV1a_64(key) % capacity;
+            return FNV1a_64(key) & (capacity-1);
         } else if constexpr (std::is_same_v<T1, double>) {
-            return FNV1a_64(*reinterpret_cast<int64_t*>(&key)) % capacity;
+            return FNV1a_64(*reinterpret_cast<int64_t*>(&key)) & (capacity-1);
         }else if constexpr(std::is_same_v<T1,std::string>){
-            return FNV1a_str(key) % capacity;
+            return FNV1a_str(key) & (capacity-1);
         }
     }
 
+    bool isPrime(int n) {
+    if (n < 2) return false;
+    if (n == 2) return true;
+    if (n % 2 == 0) return false;
+    for (int i = 3; i <= std::sqrt(n); i += 2)
+        if (n % i == 0)
+            return false;
+    return true;
+}
+
+    size_t closestPrime(size_t n) {
+        size_t candidate = n + 1;  // Start strictly above n
+        while (true) {
+            if (isPrime(candidate)) return candidate;
+            candidate++;
+        }
+    }
+    size_t closestPowerOfTwo(size_t n) {
+        if (n == 0) return 1;
+        n--;
+        n |= n >> 1;
+        n |= n >> 2;
+        n |= n >> 4;
+        n |= n >> 8;
+        n |= n >> 16;
+        if constexpr (sizeof(size_t) == 8) // 64-bit
+            n |= n >> 32;
+        return n + 1;
+    }
     //TODO: Implement rehash
     void Rehash(){
-        std:: cout <<"Hello I am here:)"<<"\n";
         return;
     }
     public:
@@ -113,7 +142,8 @@ class rh_map{
     };
     public:
     //If size is given, then
-    rh_map(size_t size) : b(static_cast<size_t>(size/REHASH_LOAD)+1), capacity(static_cast<size_t>(size/REHASH_LOAD)+1){}
+    rh_map(size_t size) : b(this->closestPowerOfTwo(static_cast<size_t>(size/REHASH_LOAD)+1)), capacity(this->closestPowerOfTwo(static_cast<size_t>(size/REHASH_LOAD)+1)){
+    }
     rh_map() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY){}
     Iterator begin() {
         return Iterator(this,0);
@@ -153,7 +183,7 @@ class rh_map{
         int32_t inserted_index = index;
         while(true){
             //Hashmap wraps around when at the end of the vector
-            index = (index + 1) % capacity;
+            index = (index + 1) & (capacity-1);
             if(this->b[index].is_empty){
                 if(flag){
                     inserted_index = index;
@@ -202,7 +232,7 @@ class rh_map{
                 break;  
 
             //Wrap around the vector
-            index = (index + 1) % capacity;
+            index = (index + 1) & (capacity-1);
             psl++;
         }while (index != start);
         return Iterator(this, b.size()); 
