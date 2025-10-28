@@ -65,23 +65,6 @@ class rh_map{
         }
     }
 
-    bool isPrime(int n) {
-    if (n < 2) return false;
-    if (n == 2) return true;
-    if (n % 2 == 0) return false;
-    for (int i = 3; i <= std::sqrt(n); i += 2)
-        if (n % i == 0)
-            return false;
-    return true;
-}
-
-    size_t closestPrime(size_t n) {
-        size_t candidate = n + 1;  // Start strictly above n
-        while (true) {
-            if (isPrime(candidate)) return candidate;
-            candidate++;
-        }
-    }
     size_t closestPowerOfTwo(size_t n) {
         if (n == 0) return 1;
         n--;
@@ -94,9 +77,9 @@ class rh_map{
             n |= n >> 32;
         return n + 1;
     }
-    //TODO: Implement rehash
     void Rehash(){
         this->capacity *= 2;
+        this->entries = 0;
         std::vector<data> old_b = this->b;
         this->b = std::vector<data>(this->capacity);
         
@@ -148,7 +131,51 @@ class rh_map{
             return !(a == b);
         }
     };
-    public:
+
+    struct ConstIterator {
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type   = std::ptrdiff_t;
+        using value_type        = const std::pair<T1, T2>;
+        using pointer           = const value_type*;
+        using reference         = const value_type&;
+
+        const rh_map* table;
+        size_t index;
+
+        ConstIterator(const rh_map* tbl, size_t idx) : table(tbl), index(idx) {
+            skip_empty();
+        }
+
+        void skip_empty() {
+            while (index < table->b.size() && table->b[index].is_empty)
+                ++index;
+        }
+
+        reference operator*() const { return table->b[index].kv; }
+        pointer operator->() const { return &table->b[index].kv; }
+
+        ConstIterator& operator++() {
+            ++index;
+            skip_empty();
+            return *this;
+        }
+
+        ConstIterator operator++(int) {
+            ConstIterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+
+        friend bool operator==(const ConstIterator& a, const ConstIterator& b) {
+            return a.table == b.table && a.index == b.index;
+        }
+
+        friend bool operator!=(const ConstIterator& a, const ConstIterator& b) {
+            return !(a == b);
+        }
+    };
+    using iterator = Iterator;
+    using const_iterator = ConstIterator;
     //If size is given, then
     rh_map(size_t size) : b(this->closestPowerOfTwo(static_cast<size_t>(size/REHASH_LOAD)+1)), capacity(this->closestPowerOfTwo(static_cast<size_t>(size/REHASH_LOAD)+1)){
     }
@@ -159,6 +186,13 @@ class rh_map{
     Iterator end(){
         return Iterator(this,b.size());
     }
+    ConstIterator begin() const { 
+        return ConstIterator(this, 0); 
+    }
+    ConstIterator end()   const { 
+        return ConstIterator(this, b.size()); 
+    }
+
     std::pair<Iterator , bool> emplace(const T1& key, const T2& value){
         return this->insert({key, value});
     }
@@ -205,7 +239,7 @@ class rh_map{
             }
             
             //Check if key is already in map
-            else if(/*key*/ this->b[index].kv.first == kv.first){
+            else if(this->b[index].kv.first == kv.first){
                 return { Iterator(this,index), false };
             }
             else if(this->b[index].psl < psl){
@@ -253,9 +287,17 @@ class rh_map{
     }
     size_t get_capacity() const {
         return this->capacity;
-    }   
+    }  
+    //Clears the hashmap 
+    void clear() {
+        for (auto& bucket : b) {
+            bucket.is_empty = true;
+            bucket.psl = 0;
+        }
+        entries = 0;
+    }
+
     //Helper functions for unit tests, they don't search with keys but with index
-    //TODO: Make them return unique if bucket is empty
     bool get_is_empty(int32_t i) const{
         return this->b[i].is_empty;
     }
