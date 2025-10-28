@@ -131,6 +131,19 @@ TEST_CASE("Clear map", "[robin_hood]") {
         REQUIRE(rh.get_is_empty(i));
 }
 
+// --- int64_t Key Tests ---
+TEST_CASE("int64_t keys", "[robin_hood]") {
+    rh_map<int64_t, int> rh;
+    rh.emplace(10000000000LL, 1);
+    rh.emplace(20000000000LL, 2);
+    rh.emplace(30000000000LL, 3);
+
+    REQUIRE(rh.find(10000000000LL)->second == 1);
+    REQUIRE(rh.find(20000000000LL)->second == 2);
+    REQUIRE(rh.find(30000000000LL)->second == 3);
+    REQUIRE(rh.find(40000000000LL) == rh.end());
+}
+
 // --- String Key Tests ---
 
 TEST_CASE("String keys", "[robin_hood]") {
