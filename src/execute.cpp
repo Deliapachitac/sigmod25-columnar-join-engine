@@ -1,7 +1,7 @@
 #include <hardware.h>
 #include <plan.h>
 #include <table.h>
-
+#include <cuckoo_hash.h>
 namespace Contest {
 
 using ExecuteResult = std::vector<std::vector<Data>>;
@@ -19,14 +19,12 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
 
-        // using HashTable = cuckoo_map<T, std::vector<size_t>>;
-        // namespace views = ranges::views;
-        // // Initialize hash table
-        // size sz    = build_left ? left.size() : right.size();
-        // HashTable hash_table(sz);
-
+        using HashTable = std::cuckoo_map<T, std::vector<size_t>>;
         namespace views = ranges::views;
-        std::unordered_map<T, std::vector<size_t>> hash_table;
+        // Initialize hash table
+        size_t sz    = build_left ? left.size() : right.size();
+        HashTable hash_table(sz);
+
         if (build_left) {
             for (auto&& [idx, record]: left | views::enumerate) {
                 std::visit(

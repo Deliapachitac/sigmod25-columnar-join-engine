@@ -14,7 +14,6 @@
 #define FNV_prime64  ((uint64_t) 1099511628211ULL)
 
 template<typename K, typename V>
-
 class cuckoo_map {
     private:
 
@@ -221,16 +220,12 @@ class cuckoo_map {
             // Check if we have to rehash before insertion based on load factor
             double current_load = float(entries) / capacity;
             if (current_load >= LOAD_FACTOR) {
-                std::cout << "Rehash triggered\n";
                 rehash();
             }
-
+            Data new_entry{{key, value}, true};
             while (true) {
-                Data new_entry{{key, value}, true};
-
                 size_t total_changes = 0;
                 size_t max_entries = std::max<size_t>(entries, 1);
-
                 for (; total_changes < max_entries; ++total_changes) {
                     auto pos1 = h1(new_entry.kv.first);
 
@@ -266,7 +261,6 @@ class cuckoo_map {
                 }
 
                 // Cycle detected, rehash and try again
-                std::cerr << "Cycle detected for key " << new_entry.kv.first << "\n";
                 rehash();
             }
 
@@ -280,12 +274,12 @@ class cuckoo_map {
                 return Iterator(this, 0, 3); // end()
 
             size_t p1 = h1(key);
-            if (p1 < T1.size() && T1[p1].occupied && T1[p1].kv.first == key) {
+            if ( T1[p1].occupied && T1[p1].kv.first == key) {
                 return Iterator(this, p1, 1);
             }
 
             size_t p2 = h2(key);
-            if (p2 < T2.size() && T2[p2].occupied && T2[p2].kv.first == key) {
+            if (T2[p2].occupied && T2[p2].kv.first == key) {
                 return Iterator(this, p2, 2);
             }
 
