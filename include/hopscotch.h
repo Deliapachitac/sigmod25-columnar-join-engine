@@ -7,6 +7,11 @@
 #include <iostream>
 #include <bitset>
 
+#define FNV_offset32 ((uint32_t) 2166136261U)
+#define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
+#define FNV_prime32  ((uint32_t) 16777619U)
+#define FNV_prime64  ((uint64_t) 1099511628211ULL)
+
 using std::cout;
 using std::endl;
 
@@ -15,9 +20,9 @@ class HopscotchMap
 {
 private:
     /* Constant variables */
-    static constexpr float LOAD_FACTOR_LIMIT = 0.95;
-    static constexpr size_t DEFAULT_NEIGHBORHOOD_LENGTH = 8;
-    static constexpr size_t DEFAULT_TABLE_SIZE = 32;
+    static constexpr float LOAD_FACTOR_LIMIT = 0.9;
+    static constexpr size_t DEFAULT_NEIGHBORHOOD_LENGTH = 64;
+    static constexpr size_t DEFAULT_TABLE_SIZE = 1024;
 
     /* Bucket structure*/
     struct Bucket
@@ -29,6 +34,45 @@ private:
     size_t neighborhood_size;
     std::vector<Bucket> table;
     size_t current_table_size = 0;
+
+    /* Hash Functions */
+    uint32_t FNV1a_32(const int32_t key){
+        uint32_t hash = FNV_offset32;
+        for(size_t i = 0; i < 4; i++){
+            uint8_t byte = (key >> (i*8)) & 0xFF;
+            hash ^= byte;
+            hash *= FNV_prime32;
+        }
+        return hash;
+    }
+    uint64_t FNV1a_64(const int64_t key){
+        uint64_t hash = FNV_offset64;
+        for(size_t i = 0; i < 8; i++){
+            uint8_t byte = (key >> (i*8)) & 0xFF;
+            hash ^= byte;
+            hash *= FNV_prime64;
+        }
+        return hash;
+    }
+    uint64_t FNV1a_str(const std::string& key){
+        uint64_t hash = FNV_offset64;
+        for(char byte: key){
+            hash^=static_cast<uint8_t>(byte);
+            hash*=FNV_prime64;
+        }
+        return hash;
+    }
+    size_t HashFunction(Key key) {
+        if constexpr (std::is_same_v<Key, int32_t>) {
+            return FNV1a_32(key) & (table_capacity-1);
+        } else if constexpr (std::is_same_v<Key, int64_t>) {
+            return FNV1a_64(key) & (table_capacity-1);
+        } else if constexpr (std::is_same_v<Key, double>) {
+            return FNV1a_64(*reinterpret_cast<int64_t*>(&key)) & (table_capacity-1);
+        }else if constexpr(std::is_same_v<Key,std::string>){
+            return FNV1a_str(key) & (table_capacity-1);
+        }
+    }
 
     /* Rehash */
     void rehash()
@@ -43,7 +87,7 @@ private:
         table.resize(table_capacity);
         current_table_size = 0;
 
-        // cout << "Rehashing, new capacity is: " << table_capacity << "\n";
+        cout << "Rehashing, new capacity is: " << table_capacity << "\n";
 
         /* Re-insert all elements */
         for (auto &bucket : old_table)
@@ -77,6 +121,13 @@ private:
         return static_cast<float>(current_table_size) / table_capacity;
     }
 
+    void print_bits(const char* message, size_t index)
+    {
+        std::cout << message << std::bitset<64>(table[index].neighborhood)<< "\n";
+    }
+
+    /* Neighborhood functions */
+
     size_t set_neighborhood_size(size_t table_size, size_t given_size)
     {
         size_t actual_size = given_size;
@@ -94,14 +145,14 @@ private:
 
         uint64_t mask;
         if (neighborhood_size == 64)
-            mask = ~0ULL; // all bits set
+            mask = ~0ULL;
         else
             mask = (1ULL << neighborhood_size) - 1;
 
-        // Extract only the top `neighborhood_size` bits
+        /* Extract only the bits needed */
         uint64_t top_bits = neighborhood >> (64 - neighborhood_size);
 
-        // Check if all bits are 1
+        /* If they are all 1,  */
         return (top_bits & mask) == mask;
     }
 
@@ -174,6 +225,7 @@ public:
         /* Check for the load factor */
         if (current_load_factor() >= LOAD_FACTOR_LIMIT)
         {
+            
             rehash();
             return emplace(key, value);
         }
@@ -185,30 +237,9 @@ public:
         }
 
         /* Hash the key and find the index */
-        size_t hash_value = std::hash<Key>{}(key);
-        size_t index = hash_value & (table_capacity - 1);
+        size_t index = HashFunction(key);
 
-        /* cout << "Hashed Index: " << index << endl;
-        cout << "Table capacity: " << table_capacity << endl;
-        cout << "Neighborhood Size: " << neighborhood_size << endl; */
-
-        /* Check if key already exists in neighborhood */
-        for (size_t offset = 0; offset < neighborhood_size; ++offset)
-        {
-            size_t idx = (index + offset) & (table_capacity - 1);
-            auto &bucket = table[idx];
-            if (bucket.data.has_value() && bucket.data->first == key)
-            {
-                bucket.data->second = value; /* update the value */
-                return {Iterator(&table, idx), true};
-            }
-        }
-
-        /* uint64_t top_bits = table[index].neighborhood >> (64 - neighborhood_size);
-        std::bitset<64> bits(top_bits);
-        std::cout << "Neighborhood Start: " << bits.to_string().substr(64 - neighborhood_size) << "\n\n"; */
-
-        /* Since the key is not in the neighborhood, check if it is full */
+        /* Check if neighborhood is full */
         if (is_neighborhood_full(table[index].neighborhood, neighborhood_size))
         {
             rehash();
@@ -222,26 +253,44 @@ public:
             free_idx = (free_idx + 1) & (table_capacity - 1);
         }
 
-        /* Insert the value in the correct index */
+        /* Hopscotch Step */
+        while (((free_idx - index) & (table_capacity - 1))>= neighborhood_size)
+        {
+            bool found = false;
+            for (size_t y_offset = neighborhood_size - 1; y_offset > 0; --y_offset)
+            {
+                size_t y_idx = (free_idx - y_offset) & (table_capacity - 1);
+                auto &y_bucket = table[y_idx];
+
+                size_t k_idx = HashFunction(y_bucket.data->first);
+                if (((free_idx + table_capacity - k_idx) & (table_capacity - 1)) < neighborhood_size)
+                {
+                    found = true;
+                    table[free_idx].data = std::move(table[y_idx].data);
+                    /* Remove old position of y */
+                    size_t k_y_dist   = (y_idx   + table_capacity - k_idx) & (table_capacity - 1);
+                    table[k_idx].neighborhood &= ~(1ULL << (64 - 1 - k_y_dist));
+                    /* Add new position of y*/
+                    size_t k_free_dist = (free_idx + table_capacity - k_idx) & (table_capacity - 1);
+                    table[k_idx].neighborhood |= (1ULL << (64 - 1 - k_free_dist));
+                    free_idx = y_idx;
+                    break;
+                }
+            }
+
+            /* Could not find such a spot, table is full */
+            if (!found)
+            {
+                rehash();
+                return emplace(key, value);
+            }
+        }
+
+        /* Finally insert element at the new free spot*/
         table[free_idx].data = std::make_pair(key, value);
-
-        /* Compute the distanse from the starting point */
+        /* Update the neighborhood bitmap */
         size_t distance = (free_idx + table_capacity - index) & (table_capacity - 1);
-        if (distance < neighborhood_size)
-        {
-            /* Write the MSBs first, with max being 64 */
-            table[index].neighborhood |= (1ULL << (64 - 1 - distance));
-        }
-        else
-        {
-            /* Fallback: simple rehash if insertion cannot be within neighborhood */
-            rehash();
-            return emplace(key, value);
-        }
-
-        /* uint64_t final_top_bits = table[index].neighborhood >> (64 - neighborhood_size);
-        std::bitset<64> final_bits(final_top_bits);
-        std::cout << "Neighborhood Final: " << final_bits.to_string().substr(64 - neighborhood_size) << "\n\n"; */
+        table[index].neighborhood |= (1ULL << (64 - 1 - distance));
 
         ++current_table_size;
 
@@ -254,16 +303,13 @@ public:
         if (table.empty())
             return end();
 
-        size_t hash_value = std::hash<Key>{}(key);
-        size_t index = hash_value & (table_capacity - 1);
-
-        uint64_t neighborhood_mask = table[index].neighborhood;
+        size_t index = HashFunction(key);
 
         /* Scan all neighborhood bits (big-endian order) */
         for (size_t offset = 0; offset < neighborhood_size; ++offset)
         {
-            /* For big-endian, bit 0 corresponds to the MSB (closest slot) */
-            if (neighborhood_mask & (1ULL << (64 - 1 - offset)))
+            /* Efficiently check if any value of the neighborhood bitmap is 1*/
+            if (table[index].neighborhood & (1ULL << (64 - 1 - offset)))
             {
                 size_t idx = (index + offset) & (table_capacity - 1);
                 auto &bucket = table[idx];
