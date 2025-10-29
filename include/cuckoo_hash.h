@@ -4,6 +4,14 @@
 #include <utility>
 #include <functional>
 #include <limits>
+#include <climits>
+#include <cstddef>  
+#include <cmath>
+
+#define FNV_offset32 ((uint32_t) 2166136261U)
+#define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
+#define FNV_prime32  ((uint32_t) 16777619U)
+#define FNV_prime64  ((uint64_t) 1099511628211ULL)
 
 template<typename K, typename V>
 
@@ -25,17 +33,84 @@ class cuckoo_map {
         static constexpr double LOAD_FACTOR = 0.5;
         static constexpr size_t DEFAULT_CAPACITY = 16;  
 
-        // Easy hash function 
-        // CHANGE IT 
-        size_t h1(const K& key) const {
-            return std::hash<K>{}(key) % capacity;
+        //We know that the possible types of data, so we hash depending on what data we have.
+        uint32_t FNV1a_32(const int32_t key) const {
+            uint32_t hash = FNV_offset32;
+            for(size_t i = 0; i < 4; i++){
+                uint8_t byte = (key >> (i*8)) & 0xFF;
+                hash ^= byte;
+                hash *= FNV_prime32;
+            }
+            return hash;
         }
 
-        size_t h2(const K& key) const {
-            return (std::hash<K>{}(key) / capacity) % capacity;
+        uint64_t FNV1a_64(const int64_t key) const {
+            uint64_t hash = FNV_offset64;
+            for(size_t i = 0; i < 8; i++){
+                uint8_t byte = (key >> (i*8)) & 0xFF;
+                hash ^= byte;
+                hash *= FNV_prime64;
+            }
+            return hash;
         }
 
-        
+        uint64_t FNV1a_str(const std::string& key) const {
+            uint64_t hash = FNV_offset64;
+            for(char byte: key){
+                hash ^= static_cast<uint8_t>(byte);
+                hash *= FNV_prime64;
+            }
+            return hash;
+        }
+
+        // use K by-value (copy) as parameter
+        size_t h1(K key) const {
+            if constexpr (std::is_same_v<K, int32_t> || std::is_same_v<K, int>) {
+                return FNV1a_32(static_cast<int32_t>(key)) & (capacity-1);
+            } else if constexpr (std::is_same_v<K, uint32_t>) {
+                return FNV1a_32(static_cast<int32_t>(key)) & (capacity-1);
+            } else if constexpr (std::is_same_v<K, int64_t>) {
+                return FNV1a_64(key) & (capacity-1);
+            } else if constexpr (std::is_same_v<K, uint64_t>) {
+                return FNV1a_64(static_cast<int64_t>(key)) & (capacity-1);
+            } else if constexpr (std::is_same_v<K, double>) {
+                return FNV1a_64(*reinterpret_cast<const int64_t*>(&key)) & (capacity-1);
+            } else if constexpr(std::is_same_v<K,std::string>){
+                return FNV1a_str(key) & (capacity-1);
+            }
+        }
+
+        size_t h2(K key) const {
+            if constexpr (std::is_same_v<K, int32_t> || std::is_same_v<K, int>) {
+                return (FNV1a_32(static_cast<int32_t>(key)) * 0x27d4eb2dU + 0x85ebca6bU) & (capacity - 1);
+            } else if constexpr (std::is_same_v<K, uint32_t>) {
+                return (FNV1a_32(static_cast<int32_t>(key)) * 0x27d4eb2dU + 0x85ebca6bU) & (capacity - 1);
+            } else if constexpr (std::is_same_v<K, int64_t> || std::is_same_v<K, double> || std::is_same_v<K, uint64_t>) {
+                uint64_t h = FNV1a_64(*reinterpret_cast<const int64_t*>(&key));
+                h ^= h >> 33;
+                h *= 0xff51afd7ed558ccdULL;
+                return h & (capacity - 1);
+            } else if constexpr (std::is_same_v<K, std::string>) {
+                uint64_t h = FNV1a_str(key);
+                h ^= h >> 32;
+                h *= 0x9e3779b97f4a7c15ULL;
+                return h & (capacity - 1);
+            }
+        }
+
+        size_t closestPowerOfTwo(size_t n) {
+            if (n == 0) return 1;
+            n--;
+            n |= n >> 1;
+            n |= n >> 2;
+            n |= n >> 4;
+            n |= n >> 8;
+            n |= n >> 16;
+            if constexpr (sizeof(size_t) == 8) // 64-bit
+                n |= n >> 32;
+            return n + 1;
+        }
+
 
         // Rehash: double capacity and reinsert everything
         // Classic approach (you can change it with incremental rehashing)
@@ -61,98 +136,150 @@ class cuckoo_map {
 
     public:
 
+        // Iterator for non-const access
+        struct Iterator {
+            using iterator_category = std::forward_iterator_tag;
+            using difference_type = std::ptrdiff_t;
+            using value_type = std::pair<K,V>;
+            using pointer = value_type*;
+            using reference = value_type&;
+
+            cuckoo_map* table;
+            size_t index;
+            int current_table; // 1 for T1, 2 for T2
+
+            Iterator(cuckoo_map* tbl, size_t idx = 0, int tbl_num = 1)
+                : table(tbl), index(idx), current_table(tbl_num) {
+                skip_empty();
+            }
+
+            void skip_empty() {
+                while (current_table <= 2) {
+                    auto& t = (current_table == 1) ? table->T1 : table->T2;
+                    while (index < t.size() && !t[index].occupied)
+                        ++index;
+                    if (index < t.size()) return;
+                    current_table++;
+                    index = 0;
+                }
+            }
+
+            reference operator*() const {
+                return (current_table == 1) ? table->T1[index].kv : table->T2[index].kv;
+            }
+
+            pointer operator->() const {
+                return &(**this);
+            }
+
+            Iterator& operator++() {
+                ++index;
+                skip_empty();
+                return *this;
+            }
+
+            Iterator operator++(int) {
+                Iterator tmp = *this;
+                ++(*this);
+                return tmp;
+            }
+
+            friend bool operator==(const Iterator& a, const Iterator& b) {
+                return a.table == b.table && a.index == b.index && a.current_table == b.current_table;
+            }
+
+            friend bool operator!=(const Iterator& a, const Iterator& b) {
+                return !(a == b);
+            }
+        };
+
+        Iterator begin() { return Iterator(this); }
+        Iterator end() { return Iterator(this, 0, 3); }// table=3 indicates past-the-end
+
         // Constructors
-        cuckoo_map(size_t size): T1(static_cast<size_t>(size/LOAD_FACTOR)+1), T2(static_cast<size_t>(size/LOAD_FACTOR)+1), capacity((static_cast<size_t>(size/LOAD_FACTOR)+1)), entries(0) {}
+        cuckoo_map(size_t size): T1(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), T2(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), capacity(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), entries(0) {}
         cuckoo_map(): T1(DEFAULT_CAPACITY), T2(DEFAULT_CAPACITY),capacity(DEFAULT_CAPACITY), entries(0) {}
 
+        std::pair<Iterator, bool> emplace(const K& key, const V& value) {
+            return this->insert(key, value) ;
+        }
         // Insert operation
         //Returns true if insertion was successful
         //If the key already exists we do not insert and return false
-        bool insert(const K& key, const V& value) {
+        std::pair<Iterator, bool> insert(const K& key, const V& value) {
 
-            // Check if  we have to rehash before insertion based on load factor
-            double current_load = static_cast<double>(entries) / (2.0 * capacity);
-            if (current_load > LOAD_FACTOR) {
-                std::cout << "[Rehash triggered] Load factor = " << current_load << " > " << LOAD_FACTOR << "\n";
+            // Check if we have to rehash before insertion based on load factor
+            double current_load = float(entries) / capacity;
+            if (current_load >= LOAD_FACTOR) {
+                std::cout << "Rehash triggered\n";
                 rehash();
             }
 
-            // This loop is necessary because it  handles multiple rehashes in case of cycles
             while (true) {
-
-                // Create the new entry that we want to insert
                 Data new_entry{{key, value}, true};
-                
-                // Variables that help with cycle detection
-                // total_changes :  counts how many displacements we have done from one table to the other
-                // max_entries   : if the entries is 0 (first insertion) we set it to 1 to avoid infinite loop
-                size_t total_changes = 0; 
-                size_t max_entries = std::max<size_t>(entries, 1);  
 
-                //If we have done more displacements than the number of entries then we have a cycle and need to rehash
+                size_t total_changes = 0;
+                size_t max_entries = std::max<size_t>(entries, 1);
+
                 for (; total_changes < max_entries; ++total_changes) {
-                    size_t pos1 = h1(new_entry.kv.first);
+                    auto pos1 = h1(new_entry.kv.first);
 
-                    // If position in the first hash table(T1) is empty then insert 
+                    // If empty, insert directly
                     if (!T1[pos1].occupied) {
                         T1[pos1] = new_entry;
                         entries++;
-                        return true;
+                        return { Iterator(this, pos1, 1), true };
                     }
 
-                    // Checking for duplicate key if the position is not empty
-                    if ( T1[pos1].kv.first  == new_entry.kv.first) {
-                        return   false;     
+                    // Duplicate key in T1
+                    if (T1[pos1].kv.first == new_entry.kv.first) {
+                        return { Iterator(this, pos1, 1), false };
                     }
-                            
-                    // Swap the existing entry with the new one
-                    std::swap( new_entry,  T1[pos1]);
 
-                    //Now calculate the postion in the second table using another hash function
-                    size_t  pos2 = h2(  new_entry.kv.first );
+                    std::swap(new_entry, T1[pos1]);
 
-                    // If position in the  second hash table(T2) is empty then insert
+                    auto pos2 = h2(new_entry.kv.first);
+
+                    // If empty, insert into T2
                     if (!T2[pos2].occupied) {
                         T2[pos2] = new_entry;
                         entries++;
-                        return true;
+                        return { Iterator(this, pos2, 2), true };
                     }
 
-                    // Check for duplicate key in the second table(T2)
+                    // Duplicate key in T2
                     if (T2[pos2].kv.first == new_entry.kv.first) {
-                        return false; 
+                        return { Iterator(this, pos2, 2), false };
                     }
 
-                    // Swap again the existing entry with the previously swapped entry and repeatagain the proccess  
                     std::swap(new_entry, T2[pos2]);
                 }
 
-                // If we got here the total changes exceeded the number of  entries so we have  a cycle
-                std::cerr << "Cycle detected " << new_entry.kv.first;
+                // Cycle detected, rehash and try again
+                std::cerr << "Cycle detected for key " << new_entry.kv.first << "\n";
                 rehash();
-
-                // Try the insertion again after rehash 
             }
 
-            // We Should never reach  here but just in case 
-            return false;
+            // Should never reach here
+            return { Iterator(this, 0, 3), false };
         }
 
-        // Find operation 
-        // In the out_value parameter we store the found value if the key exists
-        bool find(const K& key, V& out_value)  {
-            if (capacity == 0) return false; 
+
+        Iterator find(const K& key) {
+            if (capacity == 0)
+                return Iterator(this, 0, 3); // end()
+
             size_t p1 = h1(key);
             if (p1 < T1.size() && T1[p1].occupied && T1[p1].kv.first == key) {
-                out_value = T1[p1].kv.second;
-                return true;
+                return Iterator(this, p1, 1);
             }
+
             size_t p2 = h2(key);
             if (p2 < T2.size() && T2[p2].occupied && T2[p2].kv.first == key) {
-                out_value = T2[p2].kv.second;
-                return true;
+                return Iterator(this, p2, 2);
             }
-            return false;
+
+            return Iterator(this, 0, 3); // end()
         }
 
 
@@ -182,6 +309,28 @@ class cuckoo_map {
             return (table == 1) ? get_is_empty_table1(i) : get_is_empty_table2(i);
         }
 
+        void clear() {
+            for (auto& e : T1)
+                e.occupied = false;
+            for (auto& e : T2)
+                e.occupied = false;
+            entries = 0;
+        }
+
+        V get_value (int table, int32_t i) const {
+            if (table == 1) {
+                if (i < 0 || static_cast<size_t>(i) >= T1.size() || !T1[static_cast<size_t>(i)].occupied) {
+                    throw std::out_of_range("Invalid index or empty bucket in T1");
+                }
+                return T1[static_cast<size_t>(i)].kv.second;
+            } else {
+                if (i < 0 || static_cast<size_t>(i) >= T2.size() || !T2[static_cast<size_t>(i)].occupied) {
+                    throw std::out_of_range("Invalid index or empty bucket in T2");
+                }
+                return T2[static_cast<size_t>(i)].kv.second;
+            }
+        }
+
         //print the contents of the hash tables
         void print() const {
             std::cout << "T1:\n";
@@ -199,3 +348,4 @@ class cuckoo_map {
             }
         }
 };
+
