@@ -21,7 +21,7 @@ class HopscotchMap
 private:
     /* Constant variables */
     static constexpr float LOAD_FACTOR_LIMIT = 0.9;
-    static constexpr size_t DEFAULT_NEIGHBORHOOD_LENGTH = 64;
+    static constexpr size_t DEFAULT_NEIGHBORHOOD_LENGTH = 16;
     static constexpr size_t DEFAULT_TABLE_SIZE = 1024;
 
     /* Bucket structure*/
@@ -86,8 +86,6 @@ private:
         table.clear();
         table.resize(table_capacity);
         current_table_size = 0;
-
-        cout << "Rehashing, new capacity is: " << table_capacity << "\n";
 
         /* Re-insert all elements */
         for (auto &bucket : old_table)
@@ -211,7 +209,7 @@ public:
     /* Constructor */
     /* Size + Neighborhood Length */
     HopscotchMap(size_t table_size, size_t neighborhood_length)
-        : table_capacity(next_power_of_2(table_size)), neighborhood_size(set_neighborhood_size(table_capacity, neighborhood_length)), table(table_capacity) {}
+        : table_capacity(next_power_of_2(static_cast<size_t>(table_size / LOAD_FACTOR_LIMIT)+1)), neighborhood_size(set_neighborhood_size(table_capacity, neighborhood_length)), table(table_capacity) {}
     /* Size */
     HopscotchMap(size_t table_size)
         : HopscotchMap(table_size, DEFAULT_NEIGHBORHOOD_LENGTH) {}
@@ -225,7 +223,7 @@ public:
         /* Check for the load factor */
         if (current_load_factor() >= LOAD_FACTOR_LIMIT)
         {
-            
+            cout << "Load factor reached, rehashing!" << endl;
             rehash();
             return emplace(key, value);
         }
@@ -237,11 +235,14 @@ public:
         }
 
         /* Hash the key and find the index */
+        //size_t hash_value = std::hash<Key>{}(key);
+        //size_t index = hash_value & (table_capacity - 1);
         size_t index = HashFunction(key);
 
         /* Check if neighborhood is full */
         if (is_neighborhood_full(table[index].neighborhood, neighborhood_size))
         {
+            cout << "Neighborhood full, rehashing!" << endl;
             rehash();
             return emplace(key, value);
         }
@@ -262,16 +263,22 @@ public:
                 size_t y_idx = (free_idx - y_offset) & (table_capacity - 1);
                 auto &y_bucket = table[y_idx];
 
+                if (!y_bucket.data.has_value()) continue;
+
+                //size_t k_hash = std::hash<Key>{}(y_bucket.data->first);
+                //size_t k_idx = k_hash & (table_capacity - 1);
                 size_t k_idx = HashFunction(y_bucket.data->first);
-                if (((free_idx + table_capacity - k_idx) & (table_capacity - 1)) < neighborhood_size)
+
+                if (((free_idx - k_idx) & (table_capacity - 1)) < neighborhood_size)
                 {
                     found = true;
                     table[free_idx].data = std::move(table[y_idx].data);
+                    table[y_idx].data.reset();
                     /* Remove old position of y */
-                    size_t k_y_dist   = (y_idx   + table_capacity - k_idx) & (table_capacity - 1);
+                    size_t k_y_dist   = (y_idx - k_idx) & (table_capacity - 1);
                     table[k_idx].neighborhood &= ~(1ULL << (64 - 1 - k_y_dist));
                     /* Add new position of y*/
-                    size_t k_free_dist = (free_idx + table_capacity - k_idx) & (table_capacity - 1);
+                    size_t k_free_dist = (free_idx - k_idx) & (table_capacity - 1);
                     table[k_idx].neighborhood |= (1ULL << (64 - 1 - k_free_dist));
                     free_idx = y_idx;
                     break;
@@ -281,6 +288,7 @@ public:
             /* Could not find such a spot, table is full */
             if (!found)
             {
+                cout << "Could not find spot, rehashing!" << endl;
                 rehash();
                 return emplace(key, value);
             }
@@ -289,7 +297,7 @@ public:
         /* Finally insert element at the new free spot*/
         table[free_idx].data = std::make_pair(key, value);
         /* Update the neighborhood bitmap */
-        size_t distance = (free_idx + table_capacity - index) & (table_capacity - 1);
+        size_t distance = (free_idx - index) & (table_capacity - 1);
         table[index].neighborhood |= (1ULL << (64 - 1 - distance));
 
         ++current_table_size;
@@ -303,6 +311,8 @@ public:
         if (table.empty())
             return end();
 
+        //size_t hash_value = std::hash<Key>{}(key);
+        //size_t index = hash_value & (table_capacity - 1);
         size_t index = HashFunction(key);
 
         /* Scan all neighborhood bits (big-endian order) */

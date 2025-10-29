@@ -26,8 +26,6 @@ namespace Contest
             namespace views = ranges::views;
 
             size_t size = build_left ? left.size() : right.size();
-            //std::unordered_map<T, std::vector<size_t>> hash_table;
-            std::cout << "Size: " << size<< std::endl;
             HopscotchMap<T, std::vector<size_t>> hash_table(size);
             if (build_left)
             {
