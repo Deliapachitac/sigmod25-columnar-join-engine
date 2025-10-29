@@ -7,11 +7,6 @@
 #include <iostream>
 #include <bitset>
 
-#define FNV_offset32 ((uint32_t) 2166136261U)
-#define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
-#define FNV_prime32  ((uint32_t) 16777619U)
-#define FNV_prime64  ((uint64_t) 1099511628211ULL)
-
 using std::cout;
 using std::endl;
 
@@ -21,7 +16,7 @@ class HopscotchMap
 private:
     /* Constant variables */
     static constexpr float LOAD_FACTOR_LIMIT = 0.9;
-    static constexpr size_t DEFAULT_NEIGHBORHOOD_LENGTH = 16;
+    static constexpr size_t DEFAULT_NEIGHBORHOOD_LENGTH = 32;
     static constexpr size_t DEFAULT_TABLE_SIZE = 1024;
 
     /* Bucket structure*/
@@ -36,41 +31,44 @@ private:
     size_t current_table_size = 0;
 
     /* Hash Functions */
-    uint32_t FNV1a_32(const int32_t key){
-        uint32_t hash = FNV_offset32;
-        for(size_t i = 0; i < 4; i++){
-            uint8_t byte = (key >> (i*8)) & 0xFF;
-            hash ^= byte;
-            hash *= FNV_prime32;
+    size_t HashFunction(const Key &key) const
+    {
+        if constexpr (std::is_integral_v<Key>)
+        {
+            /* simple multiplicative mix, works faster than FNV-1a for ints */
+            uint64_t x = static_cast<uint64_t>(key);
+            x = (x ^ (x >> 33)) * 0xff51afd7ed558ccdULL;
+            x = (x ^ (x >> 33)) * 0xc4ceb9fe1a85ec53ULL;
+            x = x ^ (x >> 33);
+            return x & (table_capacity - 1);
         }
-        return hash;
-    }
-    uint64_t FNV1a_64(const int64_t key){
-        uint64_t hash = FNV_offset64;
-        for(size_t i = 0; i < 8; i++){
-            uint8_t byte = (key >> (i*8)) & 0xFF;
-            hash ^= byte;
-            hash *= FNV_prime64;
+        else if constexpr (std::is_floating_point_v<Key>)
+        {
+            uint64_t raw;
+            static_assert(sizeof(raw) == sizeof(key));
+            std::memcpy(&raw, &key, sizeof(key));
+            raw ^= raw >> 33;
+            raw *= 0xff51afd7ed558ccdULL;
+            raw ^= raw >> 33;
+            raw *= 0xc4ceb9fe1a85ec53ULL;
+            raw ^= raw >> 33;
+            return raw & (table_capacity - 1);
         }
-        return hash;
-    }
-    uint64_t FNV1a_str(const std::string& key){
-        uint64_t hash = FNV_offset64;
-        for(char byte: key){
-            hash^=static_cast<uint8_t>(byte);
-            hash*=FNV_prime64;
+        else if constexpr (std::is_same_v<Key, std::string>)
+        {
+            /* FNV-1a 64-bit */
+            uint64_t hash = 14695981039346656037ULL;
+            for (unsigned char c : key)
+            {
+                hash ^= c;
+                hash *= 1099511628211ULL;
+            }
+            return hash & (table_capacity - 1);
         }
-        return hash;
-    }
-    size_t HashFunction(Key key) {
-        if constexpr (std::is_same_v<Key, int32_t>) {
-            return FNV1a_32(key) & (table_capacity-1);
-        } else if constexpr (std::is_same_v<Key, int64_t>) {
-            return FNV1a_64(key) & (table_capacity-1);
-        } else if constexpr (std::is_same_v<Key, double>) {
-            return FNV1a_64(*reinterpret_cast<int64_t*>(&key)) & (table_capacity-1);
-        }else if constexpr(std::is_same_v<Key,std::string>){
-            return FNV1a_str(key) & (table_capacity-1);
+        else
+        {
+            /* Fallback to std::hash for any other type */
+            return std::hash<Key>{}(key) & (table_capacity - 1);
         }
     }
 
@@ -119,9 +117,9 @@ private:
         return static_cast<float>(current_table_size) / table_capacity;
     }
 
-    void print_bits(const char* message, size_t index)
+    void print_bits(const char *message, size_t index)
     {
-        std::cout << message << std::bitset<64>(table[index].neighborhood)<< "\n";
+        std::cout << message << std::bitset<64>(table[index].neighborhood) << "\n";
     }
 
     /* Neighborhood functions */
@@ -209,7 +207,7 @@ public:
     /* Constructor */
     /* Size + Neighborhood Length */
     HopscotchMap(size_t table_size, size_t neighborhood_length)
-        : table_capacity(next_power_of_2(static_cast<size_t>(table_size / LOAD_FACTOR_LIMIT)+1)), neighborhood_size(set_neighborhood_size(table_capacity, neighborhood_length)), table(table_capacity) {}
+        : table_capacity(next_power_of_2(static_cast<size_t>(table_size / LOAD_FACTOR_LIMIT) + 1)), neighborhood_size(set_neighborhood_size(table_capacity, neighborhood_length)), table(table_capacity) {}
     /* Size */
     HopscotchMap(size_t table_size)
         : HopscotchMap(table_size, DEFAULT_NEIGHBORHOOD_LENGTH) {}
@@ -229,14 +227,15 @@ public:
         }
 
         /* Check if table capacity is a power of 2 (for the & (capacity -1 ) to work) */
-        if ((table_capacity & (table_capacity - 1)) != 0)
+        const size_t table_mask = table_capacity - 1;
+        if ((table_capacity & table_mask) != 0)
         {
             return {end(), false};
         }
 
         /* Hash the key and find the index */
-        //size_t hash_value = std::hash<Key>{}(key);
-        //size_t index = hash_value & (table_capacity - 1);
+        // size_t hash_value = std::hash<Key>{}(key);
+        // size_t index = hash_value & table_mask;
         size_t index = HashFunction(key);
 
         /* Check if neighborhood is full */
@@ -251,35 +250,39 @@ public:
         size_t free_idx = index;
         while (table[free_idx].data.has_value())
         {
-            free_idx = (free_idx + 1) & (table_capacity - 1);
+            free_idx = (free_idx + 1) & table_mask;
         }
 
         /* Hopscotch Step */
-        while (((free_idx - index) & (table_capacity - 1))>= neighborhood_size)
+        bool found = false;
+        size_t y_idx, k_idx, k_y_dist, k_free_dist;
+        while (((free_idx - index) & table_mask) >= neighborhood_size)
         {
-            bool found = false;
+            found = false;
             for (size_t y_offset = neighborhood_size - 1; y_offset > 0; --y_offset)
             {
-                size_t y_idx = (free_idx - y_offset) & (table_capacity - 1);
+                y_idx = (free_idx - y_offset) & table_mask;
                 auto &y_bucket = table[y_idx];
 
-                if (!y_bucket.data.has_value()) continue;
+                if (!y_bucket.data.has_value())
+                    continue;
 
-                //size_t k_hash = std::hash<Key>{}(y_bucket.data->first);
-                //size_t k_idx = k_hash & (table_capacity - 1);
-                size_t k_idx = HashFunction(y_bucket.data->first);
+                // size_t k_hash = std::hash<Key>{}(y_bucket.data->first);
+                // size_t k_idx = k_hash & table_mask;
+                k_idx = HashFunction(y_bucket.data->first);
 
-                if (((free_idx - k_idx) & (table_capacity - 1)) < neighborhood_size)
+                if (((free_idx - k_idx) & table_mask) < neighborhood_size)
                 {
                     found = true;
                     table[free_idx].data = std::move(table[y_idx].data);
                     table[y_idx].data.reset();
                     /* Remove old position of y */
-                    size_t k_y_dist   = (y_idx - k_idx) & (table_capacity - 1);
+                    k_y_dist = (y_idx - k_idx) & table_mask;
                     table[k_idx].neighborhood &= ~(1ULL << (64 - 1 - k_y_dist));
                     /* Add new position of y*/
-                    size_t k_free_dist = (free_idx - k_idx) & (table_capacity - 1);
+                    k_free_dist = (free_idx - k_idx) & table_mask;
                     table[k_idx].neighborhood |= (1ULL << (64 - 1 - k_free_dist));
+                    /* Update the free index to the new free spot */
                     free_idx = y_idx;
                     break;
                 }
@@ -297,7 +300,7 @@ public:
         /* Finally insert element at the new free spot*/
         table[free_idx].data = std::make_pair(key, value);
         /* Update the neighborhood bitmap */
-        size_t distance = (free_idx - index) & (table_capacity - 1);
+        size_t distance = (free_idx - index) & table_mask;
         table[index].neighborhood |= (1ULL << (64 - 1 - distance));
 
         ++current_table_size;
@@ -311,23 +314,25 @@ public:
         if (table.empty())
             return end();
 
-        //size_t hash_value = std::hash<Key>{}(key);
-        //size_t index = hash_value & (table_capacity - 1);
+        /* Get the index of the key */
+        const size_t mask = table_capacity - 1;
         size_t index = HashFunction(key);
 
-        /* Scan all neighborhood bits (big-endian order) */
-        for (size_t offset = 0; offset < neighborhood_size; ++offset)
+        /* move the neighborhood bits to the right side, putting the redundant zeros at the beginning, if neighborhood is smaller*/
+        uint64_t top = table[index].neighborhood >> (64 - neighborhood_size);
+        while (top)
         {
-            /* Efficiently check if any value of the neighborhood bitmap is 1*/
-            if (table[index].neighborhood & (1ULL << (64 - 1 - offset)))
-            {
-                size_t idx = (index + offset) & (table_capacity - 1);
-                auto &bucket = table[idx];
-                if (bucket.data.has_value() && bucket.data->first == key)
-                    return Iterator(&table, idx);
-            }
+            /* Get the first set bit of the neighborhood (has a hashed element) */
+            int highest_bit = 63 - __builtin_clzll(top); 
+            /* Find the correct index */
+            size_t offset = (neighborhood_size - 1) - highest_bit;
+            size_t idx = (index + offset) & mask;
+            auto &bucket = table[idx];
+            if (bucket.data.has_value() && bucket.data->first == key)
+                return Iterator(&table, idx);
+            /* If we did not find it, clear it and continue */
+            top &= ~(1ULL << highest_bit);
         }
-
         return end();
     }
 
