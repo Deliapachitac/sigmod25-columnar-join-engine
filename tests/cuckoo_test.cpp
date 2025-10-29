@@ -1,6 +1,6 @@
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
-#include "cuckoo_hash.h"
+#include <cuckoo_hash.h>
 #include <array>
 
 // Checks both constructors 
@@ -16,7 +16,7 @@ TEST_CASE("Testing the default CuckooMap constructor", "[cuckoo_map]") {
 }
 
 TEST_CASE("Testing the custom capacity constructor", "[cuckoo_map]") {
-    cuckoo_map<int32_t, int32_t> cm(32);
+    cuckoo_map<int32_t, int32_t> cm(25);
     
     REQUIRE(cm.empty() == true);
     for(size_t i=0; i < cm.size(); i++){
@@ -61,17 +61,20 @@ TEST_CASE("Testing the insertion with collisions", "[cuckoo_map]") {
     cm.emplace(177, 300);
     cm.print();
 
+    //Check that the key 177 is in the hash map 
+    auto it = cm.find(177);
+    REQUIRE(it != cm.end());
+    REQUIRE(it->second == 300);
+
     REQUIRE(cm.size() == 25);
 
     
 }
 
-
 TEST_CASE("Rehash when we have a cycle", "[cuckoo_map]") {
     cuckoo_map<int32_t, std::string> cm(8);
 
     size_t temp_capacity = cm.get_capacity();
-    printf("Initial capacity: %zu\n", temp_capacity);
     
     // These will cause h1 collisions (key % 9)
     cm.emplace(20, "Alice"); //h1(20) = 1 h2(20) = 24
@@ -91,6 +94,7 @@ TEST_CASE("Rehash when we have a cycle", "[cuckoo_map]") {
     
 }
 
+// Tests for the find function
 TEST_CASE("Testing the find function", "[cuckoo_map]") {
     
     cuckoo_map<int32_t, int32_t> cm(50);
@@ -124,6 +128,7 @@ TEST_CASE("Duplicate key handling", "[cuckoo_map]") {
     REQUIRE(it->second == "First");
 }
 
+// Clear function test
 TEST_CASE("Clear map", "[cuckoo_map]") {
     cuckoo_map<int32_t, int32_t> cm;
     for (int i = 0; i < 20; ++i)
@@ -139,3 +144,58 @@ TEST_CASE("Clear map", "[cuckoo_map]") {
     for (size_t i = 0; i < cm.get_capacity(); ++i)
         REQUIRE(cm.get_is_empty(1, i));
 }
+
+// Iterator  tests
+TEST_CASE("Iterator traversal correctness", "[cuckoo_map]") {
+    cuckoo_map<int32_t, int32_t> cm(20);
+    std::array<int, 5> keys = {1, 3, 5, 7, 9};
+    for (auto k : keys) cm.emplace(k, k * 10);
+
+    std::vector<int> collected;
+    for (auto it = cm.begin(); it != cm.end(); ++it)
+        collected.push_back(it->first);
+
+    for (auto k : keys)
+        REQUIRE(std::find(collected.begin(), collected.end(), k) != collected.end());
+    REQUIRE(collected.size() == 5);
+}
+
+// Testing with different key types
+TEST_CASE("String keys", "[cuckoo_map]") {
+    cuckoo_map<std::string, int> cm;
+    cm.emplace("peter", 50);
+    cm.emplace("anna", 100);
+    cm.emplace("gary", 200);
+    cm.emplace("sophie", 560);
+
+    REQUIRE(cm.find("peter")->second == 50);
+    REQUIRE(cm.find("anna")->second == 100);
+    REQUIRE(cm.find("gary")->second == 200);
+    REQUIRE(cm.find("sophie")->second == 560);
+    REQUIRE(cm.find("delia") == cm.end());
+}
+
+TEST_CASE("Double keys", "[cuckoo_map]") {
+    cuckoo_map<double, std::string> cm;
+    cm.emplace(1.2, "chair");
+    cm.emplace(35.5, "shoe");
+    cm.emplace(54.6, "desk");
+
+    REQUIRE(cm.find(1.2)->second == "chair");
+    REQUIRE(cm.find(35.5)->second == "shoe");
+    REQUIRE(cm.find(54.6)->second == "desk");
+    REQUIRE(cm.find(0.0) == cm.end());
+}
+
+TEST_CASE("Int64 keys", "[cuckoo_map]") {
+    cuckoo_map<int64_t, int> cm;
+    cm.emplace(50000000000LL, 67);
+    cm.emplace(70000000000LL, 98);
+    cm.emplace(90000000000LL, 35);
+
+    REQUIRE(cm.find(50000000000LL)->second == 67);
+    REQUIRE(cm.find(70000000000LL)->second == 98);
+    REQUIRE(cm.find(90000000000LL)->second == 35);
+    REQUIRE(cm.find(40000000000LL) == cm.end());
+}
+

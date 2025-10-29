@@ -19,12 +19,14 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
 
-        using HashTable = cuckoo_map<T, std::vector<size_t>>;
-        namespace views = ranges::views;
+        // using HashTable = cuckoo_map<T, std::vector<size_t>>;
+        // namespace views = ranges::views;
+        // // Initialize hash table
+        // size sz    = build_left ? left.size() : right.size();
+        // HashTable hash_table(sz);
 
-        // Initialize hash table
-        size sz    = build_left ? left.size() : right.size();
-        HashTable hash_table(sz);
+        namespace views = ranges::views;
+        std::unordered_map<T, std::vector<size_t>> hash_table;
         if (build_left) {
             for (auto&& [idx, record]: left | views::enumerate) {
                 std::visit(

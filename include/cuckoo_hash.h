@@ -74,7 +74,9 @@ class cuckoo_map {
             } else if constexpr (std::is_same_v<K, uint64_t>) {
                 return FNV1a_64(static_cast<int64_t>(key)) & (capacity-1);
             } else if constexpr (std::is_same_v<K, double>) {
-                return FNV1a_64(*reinterpret_cast<const int64_t*>(&key)) & (capacity-1);
+                int64_t bits;
+                std::memcpy(&bits, &key, sizeof(double));
+                return FNV1a_64(bits) & (capacity-1);
             } else if constexpr(std::is_same_v<K,std::string>){
                 return FNV1a_str(key) & (capacity-1);
             }
@@ -85,8 +87,16 @@ class cuckoo_map {
                 return (FNV1a_32(static_cast<int32_t>(key)) * 0x27d4eb2dU + 0x85ebca6bU) & (capacity - 1);
             } else if constexpr (std::is_same_v<K, uint32_t>) {
                 return (FNV1a_32(static_cast<int32_t>(key)) * 0x27d4eb2dU + 0x85ebca6bU) & (capacity - 1);
-            } else if constexpr (std::is_same_v<K, int64_t> || std::is_same_v<K, double> || std::is_same_v<K, uint64_t>) {
-                uint64_t h = FNV1a_64(*reinterpret_cast<const int64_t*>(&key));
+            } else if constexpr (std::is_same_v<K, int64_t> || std::is_same_v<K, uint64_t>) {
+                uint64_t val = (std::is_same_v<K, uint64_t>) ? static_cast<int64_t>(key) : key;
+                uint64_t h = FNV1a_64(val);
+                h ^= h >> 33;
+                h *= 0xff51afd7ed558ccdULL;
+                return h & (capacity - 1);
+            } else if constexpr (std::is_same_v<K, double>) {
+                int64_t bits;
+                std::memcpy(&bits, &key, sizeof(double));  // safe bitwise copy
+                uint64_t h = FNV1a_64(bits);
                 h ^= h >> 33;
                 h *= 0xff51afd7ed558ccdULL;
                 return h & (capacity - 1);
