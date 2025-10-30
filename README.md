@@ -1,181 +1,83 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/gjaw_qSU)
-# SIGMOD Contest 2025
+# HOPSCOTCH ALGORITHM
 
-## Task
+**Implemented by:** Kyriakos Kalafatsis 1115202200058
 
-Given the joining pipeline and the pre-filtered input data, your task is to implement an efficient joining algorithm to accelerate the execution time of the joining pipeline. Specifically, you need to implement the following function in `src/execute.cpp`:
+## Introduction
 
-```C++
-ColumnarTable execute(const Plan& plan, void* context);
-```
+The Hopscotch hash table algorithm was implemented to be used with different key and value as a template, and the whole implementation exists in the hopscotch.h file.
+The other important file is the hopscotch_unit_tests.cpp, where all of the tests for the algorithms were written.
 
-Optionally, you can implement these two functions as well to prepare any global context (e.g., thread pool) to accelerate the execution.
+## Implementation
+### Bitmaps - Neighborhoods
 
-```C++
-void* build_context();
-void destroy_context(void*);
-```
+The main bucket for each cell of the table consists of the pair Key-Value for the data, as well as a **64-bit unsigned integer**, which represents the **neighborhood** of the cell.
+Neighborhoods do not necessarily have to be 64 bits, however they cannot exceed that number (it would not be beneficial anyway, since we want them to fit within a cache line).
 
-### Input format
+Each neighborhood bitmap uses the most significant bits (MSBs) to represent the closest cells to the home bucket.
+For example, if the neighborhood of the cell with index 5 is 100100010, it means that there are elements whose hash is 5 stored in indices 5, 8, and 12.
 
-The input plan in the above function is defined as the following struct.
+This bit-based design allows for very fast lookup operations in the find() function, as bitwise operations are highly efficient.
 
-```C++
-struct ScanNode {
-    size_t base_table_id;
-};
+### Iterator
 
-struct JoinNode {
-    bool   build_left;
-    size_t left;
-    size_t right;
-    size_t left_attr;
-    size_t right_attr;
-};
+An iterator class was implemented to allow for simple traversal of the table.
+The iterator skips over empty buckets and only returns references to valid Key-Value pairs.
+It supports prefix increment (++it) and dereferencing (*it and ->) operations, as well as comparison operators for equality and inequality.
 
-struct PlanNode {
-    std::variant<ScanNode, JoinNode>          data;
-    std::vector<std::tuple<size_t, DataType>> output_attrs;
-};
+### Hashing
 
-struct Plan {
-    std::vector<PlanNode>      nodes;
-    std::vector<ColumnarTable> inputs;
-    size_t root;
-}
-```
+A custom hash function was used, to make the program a bit more efficient. It is a hybrid between multiple hash functions, depending on the type.
 
-**Scan**:
-- The `base_table_id` member refers to which input table in the `inputs` member of a plan is used by the Scan node.
-- Each item in the `output_attrs` indicates which column in the base table should be output and what type it is.
+### Constructors
 
-**Join**:
-- The `build_left` member refers to which side the hash table should be built on, where `true` indicates building the hash table on the left child, and `false` indicates the opposite.
-- The `left` and `right` members are the indexes of the left and right child of the Join node in the `nodes` member of a plan, respectively.
-- The `left_attr` and `right_attr` members are the join condition of Join node. Supposing that there are two records, `left_record` and `right_record`, from the intermediate results of the left and right child, respectively. The members indicate that the two records should be joined when `left_record[left_attr] == right_record[right_attr]`.
-- Each item in the `output_attrs` indicates which column in the result of children should be output and what type it is. Supposing that the left child has $n_l$ columns and the right child has $n_r$ columns, the value of the index $i \in \{0, \dots, n_l + n_r - 1\}$, where the ranges $\{0, \dots, n_l - 1\}$ and $\{n_l, \dots, n_l + n_r - 1\}$ indicate the output column is from left and right child respectively.
+The class provides three constructors for flexibility:
 
-**Root**: The `root` member of a plan indicates which node is the root node of the execution plan tree.
+* **Default constructor:** Initializes a table with a default size (1024 buckets) and a default neighborhood length (32).
 
-### Data format
+* **Size constructor:** Allows initialization with a given table size, using the default neighborhood length.
 
-The input and output data both follow a simple columnar data format.
+* **Size + Neighborhood constructor:** Provides full control over both parameters, with an automatic adjustment ensuring the neighborhood never exceeds 64 bits or the table size.
 
-```C++
-enum class DataType {
-    INT32,       // 4-byte integer
-    INT64,       // 8-byte integer
-    FP64,        // 8-byte floating point
-    VARCHAR,     // string of arbitary length
-};
+Internally, the constructor also adjusts the capacity to the next power of two to optimize hashing and bit masking operations. This is very important as we can use bit operations instead of the mod, which saves a lot of 
+computing time.
 
-constexpr size_t PAGE_SIZE = 8192;
+### Emplace
 
-struct alignas(8) Page {
-    std::byte data[PAGE_SIZE];
-};
+The algorithm used for the emplace follows the exercise directly. Some interesting points include: 
+* A function checking if the neighborhood is full (= checking if all the bits are 1)
+* The main Hopscotching algorithm, in a while loop ensuring correct placement of the item in its neighborhood
+* Rehashing in 3 spots, practically the load factor limit is never met, as the size is adjusted in the constructor if given
 
-struct Column {
-    DataType           type;
-    std::vector<Page*> pages;
-};
+### Find
 
-struct ColumnarTable {
-    size_t              num_rows;
-    std::vector<Column> columns;
-};
-```
+The find function uses the bitmap of the home bucket to efficiently locate elements.
+Instead of iterating through all possible nearby buckets, it checks for the bits in a neighborhood, and only checks those with an item (set bits).
 
-A `ColumnarTable` first stores how many rows the table has in the `num_rows` member, then stores each column seperately as a `Column`. Each `Column` has a type and stores the items of the column into several pages. Each page is of 8192 bytes. In each page:
+For each set bit, the algorithm computes the actual index, checks if the key matches, and returns an iterator if found.
+This approach ensures that search operations remain extremely fast, often requiring only a few bitwise checks and one or two memory lookups.
 
-- The first 2 bytes are a `uint16_t` which is the number of rows $n_r$ in the page.
-- The following 2 bytes are a `uint16_t` which is the number of non-`NULL` values $n_v$ in the page.
-- The first $n_r$ bits in the last $\left\lfloor\frac{(n_r + 7)}{8}\right\rfloor$ bytes is a bitmap indicating whether the corresponding row has value or is `NULL`.
+### Rehash
 
-**Fixed-length attribute**: There are $n_v$ contiguous values begins at the first aligned position. For example, in a `Page` of `INT32`, the first value is at `data + 4`. While in a `Page` of `INT64` and `FP64`, the first value is at `data + 8`.
+Rehashing, as mentioned, occurs automatically when:
 
-**Variable-length attribute**: There are $n_v$ contigous offsets (`uint16_t`) begins at `data + 4` in a `Page`, followed by the content of the varchars which begins at `char_begin = data + 4 + n_r * 2`. Each offset indicates the ending offset of the corresponding `VARCHAR` with respect to the `char_begin`.
+* The table exceeds the defined load factor limit
 
-**Long string**: When the length of a string is longer than `PAGE_SIZE - 7`, it can not fit in a normal page. Special pages will be used to store such string. If $n_r$ `== 0xffff` or $n_r$ `== 0xfffe`, the `Page` is a special page for long string. `0xffff` means the page is the first page of a long string and `0xfffe` means the page is the following page of a long string. The following 2 bytes is a `uint16_t` indicating the number of chars in the page, beginning at `data + 4`.
+* The home bucket’s neighborhood becomes full during insertion.
 
-## Requirement
+* The Hopscotch algorithm cannot find any valid spots to move items
 
-- You can only modify the file `src/execute.cpp` in the project.
-- You must not use any third-party libraries. If you are using libraries for development (e.g., for logging), ensure to remove them before the final submission.
-- The joining pipeline (including order and build side) is optimized by PostgreSQL for `Hash Join` only. However, in the `execute` function, you are free to use other algorithms and change the pipeline, as long as the result is equivalent.
-- For any struct listed above, all of there members are public. You can manipulate them in free functions as desired as long as the original files are not changed and the manipulated objects can be destructed properly.
-- Your program will be evaluated on an unpublished benchmark sampled from the original JOB benchmark. You will not be able to access the test benchmark.
 
-## Quick start
+### Unit Tests
 
-> [!TIP]
-> Run all the following commands in the root directory of this project.
+Comprehensive unit tests were written in the hopscotch_unit_tests.cpp file.
+The tests cover:
 
-First, download the imdb dataset.
+* Basic insertions and lookups
 
-```bash
-./download_imdb.sh
-```
+* Rehashing behavior
 
-Second, build the project.
+* Iterator functionality
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
-cmake --build build -- -j $(nproc)
-```
+* Type checking for all possible types
 
-Third, prepare the DuckDB database for correctness checking.
-
-```bash
-./build/build_database imdb.db
-```
-
-Now, you can run the tests:
-```bash
-./build/run plans.json
-```
-> [!TIP]
-> If you want to use `Ninja Multi-Config` as the generator. The commands will look like:
-> 
->```bash
-> cmake -S . -B build -Wno-dev -G "Ninja Multi-Config"
-> cmake --build build --config Release -- -j $(nproc)
-> ./build/Release/build_database imdb.db
-> ./build/Release/run plans.json
-> ```
-
-# Cache
-## This section is only for UNIX users
-There are 2 new executables with this repository. They cache the join tables and
-result of each query and mmap them for faster loading times and getting rid of duckdb.
-
-To build the cache you need to run:
-```bash
-./build/build_cache plans.json
-```
-
-> [!TIP] 
-> If you are using `Linux x86_64` you can download our prebuilt cache with:
-> ```
-> wget http://share.uoa.gr/protected/all-download/sigmod25/sigmod25_cache_x86.tar.gz
-> ```
-> If you are using `macOS arm64` you can download our prebuilt cache with:
-> ```
-> wget http://share.uoa.gr/protected/all-download/sigmod25/sigmod25_cache_arm.tar.gz
-> ```
-> For all other systems you will need to build the cache on your own.
-
-After the cache is built you can run the queries using:
-```bash
-./build/fast plans.json
-```
-
-Also after you have built the cache you no longer need to build the `run` executable
-every time (which depends on duckdb and can be slow to compile). Just compile 
-the executable that uses the cache:
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
-cmake --build build -- -j $(nproc) fast
-```
-
-Code is compiled with Clang 18.
+* Stress Tests
