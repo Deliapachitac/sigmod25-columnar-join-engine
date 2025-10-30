@@ -221,7 +221,6 @@ public:
         /* Check for the load factor */
         if (current_load_factor() >= LOAD_FACTOR_LIMIT)
         {
-            cout << "Load factor reached, rehashing!" << endl;
             rehash();
             return emplace(key, value);
         }
@@ -241,7 +240,6 @@ public:
         /* Check if neighborhood is full */
         if (is_neighborhood_full(table[index].neighborhood, neighborhood_size))
         {
-            cout << "Neighborhood full, rehashing!" << endl;
             rehash();
             return emplace(key, value);
         }
@@ -291,7 +289,6 @@ public:
             /* Could not find such a spot, table is full */
             if (!found)
             {
-                cout << "Could not find spot, rehashing!" << endl;
                 rehash();
                 return emplace(key, value);
             }
@@ -335,6 +332,9 @@ public:
         }
         return end();
     }
+
+    /* Begin */
+    Iterator begin() { return Iterator(&table, 0); }
 
     /* End */
     Iterator end() { return Iterator(&table, table.size()); }
