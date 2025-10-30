@@ -44,15 +44,10 @@ private:
         }
         else if constexpr (std::is_floating_point_v<Key>)
         {
-            uint64_t raw;
-            static_assert(sizeof(raw) == sizeof(key));
+            /* Treat float/double as its raw integer bit representation */
+            uint64_t raw = 0;
             std::memcpy(&raw, &key, sizeof(key));
-            raw ^= raw >> 33;
-            raw *= 0xff51afd7ed558ccdULL;
-            raw ^= raw >> 33;
-            raw *= 0xc4ceb9fe1a85ec53ULL;
-            raw ^= raw >> 33;
-            return raw & (table_capacity - 1);
+            return static_cast<size_t>(raw) & (table_capacity - 1);
         }
         else if constexpr (std::is_same_v<Key, std::string>)
         {
@@ -67,7 +62,7 @@ private:
         }
         else
         {
-            /* Fallback to std::hash for any other type */
+            /* Fallback to std::hash for other types */
             return std::hash<Key>{}(key) & (table_capacity - 1);
         }
     }
@@ -320,7 +315,7 @@ public:
         while (top)
         {
             /* Get the first set bit of the neighborhood (has a hashed element) */
-            int highest_bit = 63 - __builtin_clzll(top); 
+            int highest_bit = 63 - __builtin_clzll(top);
             /* Find the correct index */
             size_t offset = (neighborhood_size - 1) - highest_bit;
             size_t idx = (index + offset) & mask;
@@ -338,4 +333,25 @@ public:
 
     /* End */
     Iterator end() { return Iterator(&table, table.size()); }
+
+    /* Functions for unit tests */
+    size_t get_current_size()
+    {
+        return current_table_size;
+    }
+
+    size_t get_capacity()
+    {
+        return table_capacity;
+    }
+
+    size_t get_neighborhood_length()
+    {
+        return neighborhood_size;
+    }
+
+    size_t get_load_factor_limit()
+    {
+        return LOAD_FACTOR_LIMIT;
+    }
 };
