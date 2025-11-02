@@ -1,5 +1,4 @@
-#define CATCH_CONFIG_MAIN
-#include "catch.hpp"
+#include <catch2/catch_test_macros.hpp>
 #include <cuckoo_hash.h>
 #include <array>
 
@@ -59,7 +58,7 @@ TEST_CASE("Testing the insertion with collisions", "[cuckoo_map]") {
     cm.emplace(99, 199);
     cm.emplace(145, 245);
     cm.emplace(177, 300);
-    cm.print();
+    
 
     //Check that the key 177 is in the hash map 
     auto it = cm.find(177);
@@ -81,16 +80,10 @@ TEST_CASE("Rehash when we have a cycle", "[cuckoo_map]") {
     cm.emplace(52, "Charlie"); // h1(52) = 1 h2(52) = 24
     cm.emplace(17, "Eve"); 
 
-    cm.print();
-    
-
     // This insertion will cause a cycle and trigger rehash
     cm.emplace(84, "Grace"); //h1(84) = 1 h2(84) = 24
-    cm.print();
 
     REQUIRE(temp_capacity * 2 == cm.get_capacity()); // Capacity should double after rehash
-
-
     
 }
 

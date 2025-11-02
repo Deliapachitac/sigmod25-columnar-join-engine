@@ -1,31 +1,45 @@
 ## Project Part 1
+Cuckoo Hashing
 
-# Cuckoo hashing
-Ονομα: Delia-Maria
-Επιθετο:Pachitac
-ΑΜ : 1115202200125
+Name: Delia-Maria
+Surname: Pachitac
+ID: 1115202200125
 
+# Implementation Details
+The implementation of cuckoo hashing contains a struct Data:
+- kv: a pair that contains the key and the value.
+- occupied: a variable indicating whether the bucket is occupied.
 
-## Implementation details 
-Η υλοποιηση του cuckoo hashing περιεχει ενα  struct Data
-  - kv : ειναι ένα ζευγαρι που περιεχει το key και το value 
-  - occupied : μια μεταβλητη που σημειωνει αν το bucket είναι κατειλημμένο
-Τα buckets αποθηκευονται σε δυο vectors T1 και T2 (δυο πινακες του ιδιου capacity).
+The buckets are stored in two vectors, T1 and T2 (two arrays with the same capacity).
 
 # Hashing
-Για το hashing εχουμε δυο συναρτησης την h1 και την h2 .Αυτες οι συναρτησεις βασιζονταιν στον  αλγόριθμος FNV-1a  για διαφορετικους τυπους κλειδιων (int32, int64, double, string). Το μεγεθος του πινακα ειναι δυναμη του δυο, ωστε να μπορουμε να χρησιμοποιουμε bitmask αντι για modulo, αυξανοντας την ταχυτητα.
+For hashing, we have two functions: h1 and h2.
+These functions are based on the FNV-1a algorithm for different key types (int32, int64, double, string).
+The table size is a power of two, allowing the use of bitmasking instead of modulo, which increases speed.
 
-# Insert / Emplace 
-Υπαρχουν δυο πινακες T1 και T2. Για καθε κλειδι υπαρχουν δυο hash functions h1 και h2 που δινουν δυο διαφορετικες πιθανες θεσεις.
+# Emplace
+There are two tables, T1 and T2. For each key, there are two hash functions, h1 and h2, giving two possible positions.
 
-Στο insert, προσπαθουμε να τοποθετησουμε το ζευγος (key,value) στη θεση που προσδιοριζεται απο h1 στο T1. Αν ειναι κενη, εισαγουμε.
+During insertion, we try to place the (key, value) pair in the position given by h1 in T1.
+If the position is empty, we insert it.
 
-Αν ομως ειναι κατειλημμενη, αρχικα ελγχουμε για duplicate key και υστερα αν δεν εχουν το ιδιο κλειδι αντικαθιστουμε το υπαρχον στοιχειο (swap) και προσπαθουμε να το τοποθετησουμε στο T2 στη θεση που δινει το h2 . Αν και εκει ειναι κενη, εισαγουμε. 
+If it is occupied, we first check for a duplicate key. If it is not a duplicate, we swap the existing element and try to place it in T2 at the position given by h2.
+If that position is also occupied, we continue performing swaps until an empty bucket is found or a cycle is detected.
 
-Διαφορετικά συνεχιζουμε τα swaps μεχρι να βρεθει κενο bucket η μεχρι να εντοπιστει κυκλος.
-
-Αν εντοπιστει κυκλος η αν ο αριθμος των στοιχειων (entries) ειναι πολυ μεγαλος, γινεται rehash: το capacity διπλασιαζεται και ολα τα στοιχεια επανατοποθετουνται στο νεο μεγεθος.
+If a cycle is detected or if the number of entries becomes too large, a rehash occurs:
+the capacity is doubled, and all elements are reinserted into the new table.
 
 # Find
+The find function checks the two possible positions:
+T1[h1(key)] or T2[h2(key)].
+If the key is found, it returns an iterator to that position; otherwise, it returns end().
 
-Η find ελεγχει τις δυο πιθανες θεσεις: στο T1[h1(key)] ή στο T2[h2(key)]. Αν βρεθει, επιστρεφει iterator στη θεση, αλλιώς end().
+# Test Coverage Summary
+- Constructors  (Default constructorand size constructor)
+- Insertion with collisions
+- Insertion with cycle Detection and rehashing
+- Duplicate Key Handling
+- Find Function
+- Clear Function
+- Iterators
+- Multiple Key Types (int32, int64, double, std::string)
