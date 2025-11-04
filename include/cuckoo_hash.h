@@ -27,8 +27,8 @@ class cuckoo_map {
         std::vector<Data> T1, T2;
 
         // Variables to keep track of capacity, size and load factor
-        size_t capacity;         // both tables have the same capacity
-        size_t entries;          // total number of entries in both tables
+        size_t capacity1, capacity2;    // each table has its own capacity
+        size_t entries1, entries2;         // total number of entries in each table    
         static constexpr double LOAD_FACTOR = 0.5;
         static constexpr size_t DEFAULT_CAPACITY = 16;  
 
@@ -64,6 +64,7 @@ class cuckoo_map {
 
         // use K by-value (copy) as parameter
         size_t h1(K key) const {
+            size_t capacity = capacity1; 
             if constexpr (std::is_same_v<K, int32_t> || std::is_same_v<K, int>) {
                 return FNV1a_32(static_cast<int32_t>(key)) & (capacity-1);
             } else if constexpr (std::is_same_v<K, uint32_t>) {
@@ -82,6 +83,7 @@ class cuckoo_map {
         }
 
         size_t h2(K key) const {
+            size_t capacity = capacity2;
             if constexpr (std::is_same_v<K, int32_t> || std::is_same_v<K, int>) {
                 return (FNV1a_32(static_cast<int32_t>(key)) * 0x27d4eb2dU + 0x85ebca6bU) & (capacity - 1);
             } else if constexpr (std::is_same_v<K, uint32_t>) {
@@ -121,26 +123,47 @@ class cuckoo_map {
         }
 
 
-        // Rehash: double capacity and reinsert everything
-        // Classic approach (you can change it with incremental rehashing)
-        void rehash() {
-            
-            capacity *= 2;
+        // Rehash: double capacity and reinsert everything for one table 
+        void rehash_one_table(int table_number) {
+            if (table_number == 1) {
+                capacity1 *= 2;
+                std::vector<Data> oldT1 = std::move(T1);
+                T1 = std::vector<Data>(capacity1);
+                entries1 = 0;
 
+                for (const auto& e : oldT1) {
+                    if (e.occupied)
+                        insert(e.kv.first, e.kv.second);
+                }
+            } 
+            else if (table_number == 2) {
+                capacity2 *= 2;
+                std::vector<Data> oldT2 = std::move(T2);
+                T2 = std::vector<Data>(capacity2);
+                entries2 = 0;
+
+                for (const auto& e : oldT2) {
+                    if (e.occupied)
+                        insert(e.kv.first, e.kv.second);
+                }
+            } 
+            else {
+                throw std::invalid_argument("Invalid table number. Must be 1 or 2.");
+            }
+        }
+
+        void rehash_both() {
+            capacity1 *= 2;
+            capacity2 *= 2;
             std::vector<Data> oldT1 = std::move(T1);
             std::vector<Data> oldT2 = std::move(T2);
-
-            T1 = std::vector<Data>(capacity);
-            T2 = std::vector<Data>(capacity);
-            entries = 0;
-
+            T1 = std::vector<Data>(capacity1);
+            T2 = std::vector<Data>(capacity2);
+            entries1 = entries2 = 0;
             for (const auto& e : oldT1)
-                if (e.occupied)
-                    insert(e.kv.first, e.kv.second);
-
+                if (e.occupied) insert(e.kv.first, e.kv.second);
             for (const auto& e : oldT2)
-                if (e.occupied)
-                    insert(e.kv.first, e.kv.second);
+                if (e.occupied) insert(e.kv.first, e.kv.second);
         }
 
     public:
@@ -206,8 +229,8 @@ class cuckoo_map {
         Iterator end() { return Iterator(this, 0, 3); }// table=3 indicates past-the-end
 
         // Constructors
-        cuckoo_map(size_t size): T1(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), T2(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), capacity(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), entries(0) {}
-        cuckoo_map(): T1(DEFAULT_CAPACITY), T2(DEFAULT_CAPACITY),capacity(DEFAULT_CAPACITY), entries(0) {}
+        cuckoo_map(size_t size): T1(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), T2(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), capacity1(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), capacity2(this->closestPowerOfTwo(static_cast<size_t>(size/LOAD_FACTOR)+1)), entries1(0), entries2(0) {}
+        cuckoo_map(): T1(DEFAULT_CAPACITY), T2(DEFAULT_CAPACITY),capacity1(DEFAULT_CAPACITY), capacity2(DEFAULT_CAPACITY), entries1(0), entries2(0) {}
 
         std::pair<Iterator, bool> emplace(const K& key, const V& value) {
             return this->insert(key, value) ;
@@ -218,21 +241,23 @@ class cuckoo_map {
         std::pair<Iterator, bool> insert(const K& key, const V& value) {
 
             // Check if we have to rehash before insertion based on load factor
-            double current_load = float(entries) / capacity;
-            if (current_load >= LOAD_FACTOR) {
-                rehash();
-            }
+            // Check per-table load
+            if (double(entries1) / capacity1 >= LOAD_FACTOR)
+                rehash_one_table(1);
+            if (double(entries2) / capacity2 >= LOAD_FACTOR)
+                rehash_one_table(2);
+
             Data new_entry{{key, value}, true};
             while (true) {
                 size_t total_changes = 0;
-                size_t max_entries = std::max<size_t>(entries, 1);
+                size_t max_entries = std::max<size_t>(entries1 + entries2, 1);
                 for (; total_changes < max_entries; ++total_changes) {
                     auto pos1 = h1(new_entry.kv.first);
 
                     // If empty, insert directly
                     if (!T1[pos1].occupied) {
                         T1[pos1] = new_entry;
-                        entries++;
+                        entries1++;
                         return { Iterator(this, pos1, 1), true };
                     }
 
@@ -248,7 +273,7 @@ class cuckoo_map {
                     // If empty, insert into T2
                     if (!T2[pos2].occupied) {
                         T2[pos2] = new_entry;
-                        entries++;
+                        entries2++;
                         return { Iterator(this, pos2, 2), true };
                     }
 
@@ -261,7 +286,7 @@ class cuckoo_map {
                 }
 
                 // Cycle detected, rehash and try again
-                rehash();
+                rehash_both();
             }
 
             // Should never reach here
@@ -270,7 +295,7 @@ class cuckoo_map {
 
 
         Iterator find(const K& key) {
-            if (capacity == 0)
+            if (capacity1 == 0 && capacity2 == 0)
                 return Iterator(this, 0, 3); // end()
 
             size_t p1 = h1(key);
@@ -288,14 +313,14 @@ class cuckoo_map {
 
 
         // Functions to get current size , capacity  and check if both tables are empty
-        size_t get_capacity() const { 
-            return capacity; 
+        size_t get_capacity(int table_number) const { 
+            return (table_number == 1) ? capacity1 : capacity2;
         }
         size_t size() const { 
-            return entries; 
+            return entries1 + entries2; 
         }
         bool empty() const { 
-            return entries == 0; 
+            return (entries1 + entries2) == 0; 
         }
 
         // Functions that check if a bucket is empty in table T1 and T2
@@ -318,7 +343,8 @@ class cuckoo_map {
                 e.occupied = false;
             for (auto& e : T2)
                 e.occupied = false;
-            entries = 0;
+            entries1 = 0;
+            entries2 = 0;
         }
 
         V get_value (int table, int32_t i) const {
@@ -338,14 +364,14 @@ class cuckoo_map {
         //print the contents of the hash tables
         void print() const {
             std::cout << "T1:\n";
-            for (size_t i = 0; i < capacity; ++i) {
+            for (size_t i = 0; i < capacity1; ++i) {
                 if (T1[i].occupied)
                     std::cout << "[" << i << "] " << T1[i].kv.first
                             << " -> " << T1[i].kv.second << "\n";
             }
 
             std::cout << "T2:\n";
-            for (size_t i = 0; i < capacity; ++i) {
+            for (size_t i = 0; i < capacity2; ++i) {
                 if (T2[i].occupied)
                     std::cout << "[" << i << "] " << T2[i].kv.first
                             << " -> " << T2[i].kv.second << "\n";

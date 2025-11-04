@@ -6,7 +6,8 @@
 TEST_CASE("Testing the default CuckooMap constructor", "[cuckoo_map]") {
     cuckoo_map<int32_t, int32_t> cm;
 
-    REQUIRE(cm.get_capacity() == 16);
+    REQUIRE(cm.get_capacity(1) == 16);
+    REQUIRE(cm.get_capacity(2) == 16);
     REQUIRE(cm.empty() == true);
     for(size_t i=0; i < 16; i++){
         REQUIRE(cm.get_is_empty(1,i) == true);
@@ -28,16 +29,18 @@ TEST_CASE("Testing the custom capacity constructor", "[cuckoo_map]") {
 TEST_CASE("Testing the insertion with collisions", "[cuckoo_map]") {
     cuckoo_map<int32_t, int32_t> cm;
 
-    // Because we insert 20 elements while the capacity is 16 rehash should occur
+    // Because we insert 20 elements while the capacity is 16 rehash should occur ONLY on the first table 
     // So the capacity should double
     for (size_t i = 0; i < 20; ++i)
         cm.emplace(i, i + 100);
 
     REQUIRE_FALSE(cm.empty());
     REQUIRE(cm.size() == 20);
-    
+    REQUIRE(cm.get_capacity(1) > 16); // Capacity of first table should have doubled
+    REQUIRE(cm.get_capacity(2) == 16); // Capacity of second table should remain the same    
+
     std::array<bool, 20> found{};
-    for (size_t i = 0; i < cm.get_capacity(); ++i) {
+    for (size_t i = 0; i < cm.get_capacity(1); ++i) {
         if (!cm.get_is_empty(1, i)) {
             int val = cm.get_value(1, i);
             int idx = val - 100;
@@ -73,7 +76,8 @@ TEST_CASE("Testing the insertion with collisions", "[cuckoo_map]") {
 TEST_CASE("Rehash when we have a cycle", "[cuckoo_map]") {
     cuckoo_map<int32_t, std::string> cm(8);
 
-    size_t temp_capacity = cm.get_capacity();
+    // At first both tables have the same capacity 
+    size_t temp_capacity = cm.get_capacity(1);
     
     // These will cause h1 collisions (key % 9)
     cm.emplace(20, "Alice"); //h1(20) = 1 h2(20) = 24
@@ -83,7 +87,9 @@ TEST_CASE("Rehash when we have a cycle", "[cuckoo_map]") {
     // This insertion will cause a cycle and trigger rehash
     cm.emplace(84, "Grace"); //h1(84) = 1 h2(84) = 24
 
-    REQUIRE(temp_capacity * 2 == cm.get_capacity()); // Capacity should double after rehash
+    // After rehash, capacity should have doubled for both tables
+    REQUIRE(temp_capacity * 2 == cm.get_capacity(1));
+    REQUIRE(temp_capacity * 2 == cm.get_capacity(2));
     
 }
 
@@ -134,7 +140,7 @@ TEST_CASE("Clear map", "[cuckoo_map]") {
     REQUIRE(cm.empty());
     REQUIRE(cm.size() == 0);
 
-    for (size_t i = 0; i < cm.get_capacity(); ++i)
+    for (size_t i = 0; i < cm.get_capacity(1); ++i)
         REQUIRE(cm.get_is_empty(1, i));
 }
 
