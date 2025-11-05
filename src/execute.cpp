@@ -19,7 +19,7 @@ struct JoinAlgorithm {
     template <class T>
     auto run() {
 
-        using HashTable = std::cuckoo_map<T, std::vector<size_t>>;
+        using HashTable = cuckoo_map<T, std::vector<size_t>>;
         namespace views = ranges::views;
         // Initialize hash table
         size_t sz    = build_left ? left.size() : right.size();
