@@ -1,7 +1,13 @@
 #include <hardware.h>
 #include <plan.h>
 #include <table.h>
-#include <cuckoo_hash.h>
+#include <iostream>
+#include <robin_hood.h>
+#include <cstdlib>
+// SET TO 1 TO USE THIS HASHMAP, IF MULTIPLE ARE ACTIVE THE FIRST IN ORDER WILL BE USED, NONE ACTIVE AND UNORDERED_MAP WILL BE USED INSTEAD AS DEFAULT
+#define USE_RH 1
+#define USE_CUCKOO 0
+#define USE_HOPSCOTCH 0
 namespace Contest {
 
 using ExecuteResult = std::vector<std::vector<Data>>;
@@ -18,14 +24,17 @@ struct JoinAlgorithm {
 
     template <class T>
     auto run() {
-
-        using HashTable = cuckoo_map<T, std::vector<size_t>>;
+       
         namespace views = ranges::views;
-        // Initialize hash table
-        size_t sz    = build_left ? left.size() : right.size();
-        HashTable hash_table(sz);
+        using HashTable = std::unordered_map<T, std::vector<size_t>>;
+        
+        if(USE_RH) using HashTable = rh_map<T, std::vector<size_t>>;
+        else if(USE_CUCKOO) using HashTable = cuckoo_map<T, std::vector<size_t>>;
+        else if(USE_HOPSCOTCH) using HashTable = HopscotchMap<T, std::vector<size_t>>;
 
-        if (build_left) {
+        size_t sz = build_left ? left.size() : right.size();
+        HashTable hash_table(sz);
+        if (build_left) { 
             for (auto&& [idx, record]: left | views::enumerate) {
                 std::visit(
                     [&hash_table, idx = idx](const auto& key) {
