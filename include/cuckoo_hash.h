@@ -7,12 +7,15 @@
 #include <climits>
 #include <cstddef>  
 #include <cmath>
+#include <iostream>
 
 #define FNV_offset32 ((uint32_t) 2166136261U)
 #define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
 #define FNV_prime32  ((uint32_t) 16777619U)
 #define FNV_prime64  ((uint64_t) 1099511628211ULL)
-
+#define MAX_KICKS 500
+#define TABLE_ONE 1
+#define TABLE_TWO 2
 template<typename K, typename V>
 class cuckoo_map {
     private:
@@ -125,7 +128,8 @@ class cuckoo_map {
 
         // Rehash: double capacity and reinsert everything for one table 
         void rehash_one_table(int table_number) {
-            if (table_number == 1) {
+            //std::cout << "Rehashing one" << std::endl;
+            if (table_number == TABLE_ONE) {
                 capacity1 *= 2;
                 std::vector<Data> oldT1 = std::move(T1);
                 T1 = std::vector<Data>(capacity1);
@@ -136,7 +140,7 @@ class cuckoo_map {
                         insert(e.kv.first, e.kv.second);
                 }
             } 
-            else if (table_number == 2) {
+            else if (table_number == TABLE_TWO) {
                 capacity2 *= 2;
                 std::vector<Data> oldT2 = std::move(T2);
                 T2 = std::vector<Data>(capacity2);
@@ -153,6 +157,7 @@ class cuckoo_map {
         }
 
         void rehash_both() {
+            //std::cout << "Rehashing both" << std::endl;
             capacity1 *= 2;
             capacity2 *= 2;
             std::vector<Data> oldT1 = std::move(T1);
@@ -180,14 +185,14 @@ class cuckoo_map {
             size_t index;
             int current_table; // 1 for T1, 2 for T2
 
-            Iterator(cuckoo_map* tbl, size_t idx = 0, int tbl_num = 1)
+            Iterator(cuckoo_map* tbl, size_t idx = 0, int tbl_num = TABLE_ONE)
                 : table(tbl), index(idx), current_table(tbl_num) {
                 skip_empty();
             }
 
             void skip_empty() {
-                while (current_table <= 2) {
-                    auto& t = (current_table == 1) ? table->T1 : table->T2;
+                while (current_table <= TABLE_TWO) {
+                    auto& t = (current_table == TABLE_ONE) ? table->T1 : table->T2;
                     while (index < t.size() && !t[index].occupied)
                         ++index;
                     if (index < t.size()) return;
@@ -197,7 +202,7 @@ class cuckoo_map {
             }
 
             reference operator*() const {
-                return (current_table == 1) ? table->T1[index].kv : table->T2[index].kv;
+                return (current_table == TABLE_ONE) ? table->T1[index].kv : table->T2[index].kv;
             }
 
             pointer operator->() const {
@@ -243,14 +248,14 @@ class cuckoo_map {
             // Check if we have to rehash before insertion based on load factor
             // Check per-table load
             if (double(entries1) / capacity1 >= LOAD_FACTOR)
-                rehash_one_table(1);
+                rehash_one_table(TABLE_ONE);
             if (double(entries2) / capacity2 >= LOAD_FACTOR)
-                rehash_one_table(2);
+                rehash_one_table(TABLE_TWO);
 
             Data new_entry{{key, value}, true};
             while (true) {
                 size_t total_changes = 0;
-                size_t max_entries = std::max<size_t>(entries1 + entries2, 1);
+                size_t max_entries = std::min<size_t>(std::max<size_t>(entries1 + entries2, 1), MAX_KICKS);
                 for (; total_changes < max_entries; ++total_changes) {
                     auto pos1 = h1(new_entry.kv.first);
 
@@ -314,7 +319,7 @@ class cuckoo_map {
 
         // Functions to get current size , capacity  and check if both tables are empty
         size_t get_capacity(int table_number) const { 
-            return (table_number == 1) ? capacity1 : capacity2;
+            return (table_number == TABLE_ONE) ? capacity1 : capacity2;
         }
         size_t size() const { 
             return entries1 + entries2; 
@@ -335,7 +340,7 @@ class cuckoo_map {
 
         // General  function to check if a bucket is empty in either table using the previous functions
         bool get_is_empty(int table, int32_t i) const {
-            return (table == 1) ? get_is_empty_table1(i) : get_is_empty_table2(i);
+            return (table == TABLE_ONE) ? get_is_empty_table1(i) : get_is_empty_table2(i);
         }
 
         void clear() {
@@ -348,7 +353,7 @@ class cuckoo_map {
         }
 
         V get_value (int table, int32_t i) const {
-            if (table == 1) {
+            if (table == TABLE_ONE) {
                 if (i < 0 || static_cast<size_t>(i) >= T1.size() || !T1[static_cast<size_t>(i)].occupied) {
                     throw std::out_of_range("Invalid index or empty bucket in T1");
                 }
