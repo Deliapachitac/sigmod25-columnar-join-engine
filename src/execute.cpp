@@ -1,8 +1,14 @@
 #include <hardware.h>
 #include <plan.h>
 #include <table.h>
-
-#include <hopscotch.h>
+#include <iostream>
+#include <robin_hood.h>
+#include <cstdlib>
+// SET TO 1 TO USE THIS HASHMAP, IF MULTIPLE ARE ACTIVE THE FIRST IN ORDER WILL BE USED, NONE ACTIVE AND UNORDERED_MAP WILL BE USED INSTEAD AS DEFAULT
+#define USE_RH 1
+#define USE_CUCKOO 0
+#define USE_HOPSCOTCH 0
+namespace Contest {
 
 namespace Contest
 {
@@ -11,40 +17,28 @@ namespace Contest
 
     ExecuteResult execute_impl(const Plan &plan, size_t node_idx);
 
-    struct JoinAlgorithm
-    {
-        bool build_left;
-        ExecuteResult &left;
-        ExecuteResult &right;
-        ExecuteResult &results;
-        size_t left_col, right_col;
-        const std::vector<std::tuple<size_t, DataType>> &output_attrs;
+    template <class T>
+    auto run() {
+       
+        namespace views = ranges::views;
+        using HashTable = std::unordered_map<T, std::vector<size_t>>;
+        
+        if(USE_RH) using HashTable = rh_map<T, std::vector<size_t>>;
+        else if(USE_CUCKOO) using HashTable = cuckoo_map<T, std::vector<size_t>>;
+        else if(USE_HOPSCOTCH) using HashTable = HopscotchMap<T, std::vector<size_t>>;
 
-        template <class T>
-        auto run()
-        {
-            namespace views = ranges::views;
-
-            size_t size = build_left ? left.size() : right.size();
-            HopscotchMap<T, std::vector<size_t>> hash_table(size);
-            if (build_left)
-            {
-                for (auto &&[idx, record] : left | views::enumerate)
-                {
-                    std::visit(
-                        [&hash_table, idx = idx](const auto &key)
-                        {
-                            using Tk = std::decay_t<decltype(key)>;
-                            if constexpr (std::is_same_v<Tk, T>)
-                            {
-                                if (auto itr = hash_table.find(key); itr == hash_table.end())
-                                {
-                                    hash_table.emplace(key, std::vector<size_t>(1, idx));
-                                }
-                                else
-                                {
-                                    itr->second.push_back(idx);
-                                }
+        size_t sz = build_left ? left.size() : right.size();
+        HashTable hash_table(sz);
+        if (build_left) { 
+            for (auto&& [idx, record]: left | views::enumerate) {
+                std::visit(
+                    [&hash_table, idx = idx](const auto& key) {
+                        using Tk = std::decay_t<decltype(key)>;
+                        if constexpr (std::is_same_v<Tk, T>) {
+                            if (auto itr = hash_table.find(key); itr == hash_table.end()) {
+                                hash_table.emplace(key, std::vector<size_t>(1, idx));
+                            } else {
+                                itr->second.push_back(idx);
                             }
                             else if constexpr (not std::is_same_v<Tk, std::monostate>)
                             {
