@@ -7,7 +7,6 @@
 #include <climits>
 #include <cstddef>  
 #include <cmath>
-#include <iostream>
 
 #define FNV_offset32 ((uint32_t) 2166136261U)
 #define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
@@ -128,7 +127,6 @@ class cuckoo_map {
 
         // Rehash: double capacity and reinsert everything for one table 
         void rehash_one_table(int table_number) {
-            //std::cout << "Rehashing one" << std::endl;
             if (table_number == TABLE_ONE) {
                 capacity1 *= 2;
                 std::vector<Data> oldT1 = std::move(T1);
@@ -157,7 +155,6 @@ class cuckoo_map {
         }
 
         void rehash_both() {
-            //std::cout << "Rehashing both" << std::endl;
             capacity1 *= 2;
             capacity2 *= 2;
             std::vector<Data> oldT1 = std::move(T1);
