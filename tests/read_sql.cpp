@@ -1317,7 +1317,8 @@ std::pair<bool, size_t> run(const std::unordered_map<std::string, std::vector<st
 #ifdef TEAMOPT_USE_DUCKDB
     duckdb::Connection&                                                   conn,
 #endif
-    [[maybe_unused]] void*                                                context) {
+    [[maybe_unused]] void*                                                context) 
+{
     ParsedSQL parsed_sql(column_to_tables);
     parsed_sql.parse_sql(sql, name);
 
@@ -1375,6 +1376,8 @@ std::pair<bool, size_t> run(const std::unordered_map<std::string, std::vector<st
 int main(int argc, char* argv[]) {
     namespace views = ranges::views;
     const auto output_filename = std::string{"BENCHMARK_RUNTIME.txt"};
+
+    fmt::print("Reading schema from schema.json...\n");
 
     try {
         if (argc < 2) {
