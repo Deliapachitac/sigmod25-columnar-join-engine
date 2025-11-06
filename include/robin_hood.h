@@ -1,9 +1,7 @@
 #include <vector>
 #include <iterator>
 #include <climits>
-#include <cstddef>  
-#include <cmath>
-#include <chrono>
+
 #define FNV_offset32 ((uint32_t) 2166136261U)
 #define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
 #define FNV_prime32  ((uint32_t) 16777619U)
