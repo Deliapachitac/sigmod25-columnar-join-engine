@@ -1,0 +1,309 @@
+#include <vector>
+#include <iterator>
+#include <climits>
+#include <cstddef>  
+#include <cmath>
+#include <chrono>
+#define FNV_offset32 ((uint32_t) 2166136261U)
+#define FNV_offset64 ((uint64_t) 14695981039346656037ULL)
+#define FNV_prime32  ((uint32_t) 16777619U)
+#define FNV_prime64  ((uint64_t) 1099511628211ULL)
+
+template<typename T1, typename T2> 
+class rh_map{
+    private:
+    struct data {
+        //Probe sequence length
+        size_t psl;
+        //Pair holding kay and value, we use pair so we can have a correct iterator
+        std::pair<T1,T2> kv;
+        //Flag to note that the bucket is empty
+        bool is_empty = true;
+    };
+    static constexpr size_t DEFAULT_CAPACITY = 16; 
+    static constexpr float REHASH_LOAD = 0.75;
+    //Hashtable buckets, they are of type node
+    std::vector<data> b;
+    size_t capacity;
+    size_t entries = 0;
+    //We know that the possible types of data, so we hash depending on what data we have.
+    uint32_t FNV1a_32(const int32_t& key) const{
+        uint32_t hash = FNV_offset32;
+        for(size_t i = 0; i < 4; i++){
+            uint8_t byte = (key >> (i*8)) & 0xFF;
+            hash ^= byte;
+            hash *= FNV_prime32;
+        }
+        return hash;
+    }
+    uint64_t FNV1a_64(const int64_t& key) const{
+        uint64_t hash = FNV_offset64;
+        for(size_t i = 0; i < 8; i++){
+            uint8_t byte = (key >> (i*8)) & 0xFF;
+            hash ^= byte;
+            hash *= FNV_prime64;
+        }
+        return hash;
+    }
+    uint64_t FNV1a_str(const std::string& key) const{
+        uint64_t hash = FNV_offset64;
+        for(char byte: key){
+            hash^=static_cast<uint8_t>(byte);
+            hash*=FNV_prime64;
+        }
+        return hash;
+    }
+    size_t HashFunction(const T1& key) {
+        if constexpr (std::is_same_v<T1, int32_t>) {
+            return FNV1a_32(key) & (capacity-1);
+        } else if constexpr (std::is_same_v<T1, int64_t>) {
+            return FNV1a_64(key) & (capacity-1);
+        } else if constexpr (std::is_same_v<T1, double>) {
+            return FNV1a_64(*reinterpret_cast<const int64_t*>(&key)) & (capacity-1);
+        }else if constexpr(std::is_same_v<T1,std::string>){
+            return FNV1a_str(key) & (capacity-1);
+        }
+    }
+
+    size_t closestPowerOfTwo(size_t n) const{
+        if (n == 0) return 1;
+        n--;
+        n |= n >> 1;
+        n |= n >> 2;
+        n |= n >> 4;
+        n |= n >> 8;
+        n |= n >> 16;
+        if constexpr (sizeof(size_t) == 8) // 64-bit
+            n |= n >> 32;
+        return n + 1;
+    }
+    void Rehash(){
+        capacity *= 2;
+        entries = 0;
+        std::vector<data> old_b = b;
+        b = std::vector<data>(capacity);
+        
+        for ( auto &item : old_b){
+            if(!item.is_empty){
+                insert (item.kv);
+            }
+        }
+    }
+
+    public:
+    struct Iterator{
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type = std::ptrdiff_t;
+        using value_type = std::pair<T1,T2>;
+        using pointer = value_type*;
+        using reference = value_type&;
+        
+        rh_map* table;
+        size_t index;
+
+        Iterator(rh_map* tbl, size_t idx) : table(tbl), index(idx) {
+            skip_empty();
+        }
+
+        void skip_empty() {
+            while (index < table->b.size() && table->b[index].is_empty) 
+                ++index;
+        }
+        
+        value_type& operator*() const { return table->b[index].kv; }
+        value_type* operator->() const { return &table->b[index].kv; }
+
+        Iterator& operator++() { 
+            ++index;
+            skip_empty();
+            return *this;
+        }
+
+        Iterator operator++(int) { 
+            Iterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+
+        friend bool operator==(const Iterator& a, const Iterator& b) {
+            return a.table == b.table && a.index == b.index;
+        }
+        friend bool operator!=(const Iterator& a, const Iterator& b) {
+            return !(a == b);
+        }
+    };
+
+    struct ConstIterator {
+        using iterator_category = std::forward_iterator_tag;
+        using difference_type   = std::ptrdiff_t;
+        using value_type        = const std::pair<T1, T2>;
+        using pointer           = const value_type*;
+        using reference         = const value_type&;
+
+        const rh_map* table;
+        size_t index;
+
+        ConstIterator(const rh_map* tbl, size_t idx) : table(tbl), index(idx) {
+            skip_empty();
+        }
+
+        void skip_empty() {
+            while (index < table->b.size() && table->b[index].is_empty)
+                ++index;
+        }
+
+        reference operator*() const { return table->b[index].kv; }
+        pointer operator->() const { return &table->b[index].kv; }
+
+        ConstIterator& operator++() {
+            ++index;
+            skip_empty();
+            return *this;
+        }
+
+        ConstIterator operator++(int) {
+            ConstIterator tmp = *this;
+            ++(*this);
+            return tmp;
+        }
+
+        friend bool operator==(const ConstIterator& a, const ConstIterator& b) {
+            return a.table == b.table && a.index == b.index;
+        }
+
+        friend bool operator!=(const ConstIterator& a, const ConstIterator& b) {
+            return !(a == b);
+        }
+    };
+    using iterator = Iterator;
+    using const_iterator = ConstIterator;
+    //If size is given, then
+    rh_map(size_t size) : b(closestPowerOfTwo(static_cast<size_t>(size/REHASH_LOAD)+1)), capacity(closestPowerOfTwo(static_cast<size_t>(size/REHASH_LOAD)+1)){
+    }
+    rh_map() : b(DEFAULT_CAPACITY), capacity(DEFAULT_CAPACITY){}
+    Iterator begin() {
+        return Iterator(this,0);
+    }
+    Iterator end(){
+        return Iterator(this,b.size());
+    }
+    ConstIterator begin() const { 
+        return ConstIterator(this, 0); 
+    }
+    ConstIterator end()   const { 
+        return ConstIterator(this, b.size()); 
+    }
+
+    std::pair<Iterator , bool> emplace(const T1& key, const T2& value){
+        return insert({key, value});
+    }
+    //Inserts a key to the hashmap
+    //Return a pair, the first value is an iterator where we inserted the key, or one past the end if the key was already in the map,
+    //and a bool that signals if the operation was successful
+    std::pair<Iterator , bool> insert(const std::pair<T1,T2>& values){
+        Iterator findRes = find(values.first);
+        if(findRes != end()){
+            return { findRes, false };
+        }
+        
+        std::pair<T1,T2> kv = values;
+        float load_factor = float(entries)/capacity;
+        if(load_factor >= REHASH_LOAD){
+            Rehash();
+        }
+        auto index = HashFunction(kv.first);
+        //If the index bucket is empty insert there, otherwise insert elsewhere
+        if(b[index].is_empty){
+            entries++;
+            b[index].is_empty = false;
+            b[index].psl = 0;
+            b[index].kv = kv;
+            return { Iterator(this,index) , true };
+        }
+        //This means we have a colission
+        bool flag = true;
+        size_t psl = 1;
+        int32_t inserted_index = index;
+        while(true){
+            //Hashmap wraps around when at the end of the vector
+            index = (index + 1) & (capacity-1);
+            if(b[index].is_empty){
+                if(flag){
+                    inserted_index = index;
+                    flag = false;
+                }
+                entries++;
+                b[index].is_empty = false;
+                b[index].psl = psl;
+                b[index].kv = kv;
+                break;
+            }
+            else if(b[index].psl < psl){
+                //We may go through this step multiple times, we make sure we return the right index
+                if(flag){
+                    inserted_index = index;
+                    flag = false;
+                }
+                std::swap(b[index].kv, kv);
+                std::swap(b[index].psl, psl);
+            }
+            psl++;
+        }
+        return {Iterator(this,inserted_index), true};
+        
+    }
+    //Searches for the value with the given key, returns iterator at the desired value or iterator one past the last index
+    Iterator find(const T1& key) {
+        const size_t mask = capacity - 1;
+        size_t index = HashFunction(key);
+        size_t psl = 0;
+        auto* table = b.data();
+
+        while(true) {
+            const auto& bucket = table[index];
+
+            if (bucket.is_empty) break;
+
+            if (bucket.kv.first == key) {
+                return Iterator(this, index);
+            }
+            if (bucket.psl < psl) break;
+
+            index = (index + 1) & mask;
+            psl++;
+        }
+
+        return Iterator(this, b.size());
+    }
+    bool empty() const{
+        return entries == 0;
+    }
+    size_t size() const{
+        return entries;
+    }
+    size_t get_capacity() const {
+        return capacity;
+    }  
+    //Clears the hashmap 
+    void clear() {
+        for (auto& bucket : b) {
+            bucket.is_empty = true;
+            bucket.psl = 0;
+        }
+        entries = 0;
+    }
+
+    //Helper functions for unit tests, they don't search with keys but with index
+    bool get_is_empty(int32_t i) const{
+        return b[i].is_empty;
+    }
+    size_t get_psl(int32_t i) const{
+        if(b[i].is_empty){
+            return std::numeric_limits<size_t>::max();
+        }
+        return b[i].psl;
+    }
+    T2 get_v(int32_t i) const{
+        return b[i].kv.second;
+    }
+};

@@ -1,181 +1,192 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/gjaw_qSU)
-# SIGMOD Contest 2025
+# Project Part 1
 
-## Task
+# Optimization testing
+After running tests to see where the hashtable spends the most time, I saw that 99% of the time was spent at find, while a small fraction was spent in insert. This is to be expected as only a small fraction of the operations performed were inserts and most operations where finds. So I focused more on trying to make find as effecient as possible. Adding early stopping improved performance and I made sure to compute all variables before the main loop to avoid unecessary pointer dereferencing, and also passed the key as a reference to avoid the item being copied which would have been costly. A big factor in optimizing find would be the hash function. A good hash function was necessary to improve on the performance. Since most time was speant on search, ideally we want a hash function that has the best statistical properties, not necessarily the fastest one to compute, since we don't call it often and the program spends so little time, that it can safely be ignored. Using std::hash proved to be catastrophic because runtime would skyrocket to 10-20x the time it took to run the program with unordered map. This happens because std::hash does not perform good for open addressing, and finds end up taking O(n) due to bad spread of the entries. I chose to use FNV1a hash, 32 and 64 bit versions because it was very simple to implement and performed very well in terms of distribution. After running the program I found out that it ran marginally better than the unordered map, faster that cuckoo hashing and a bit slower that Hopscotch hashing, which was to be expected. Hopscotch was expected to be the fastest, since find, which takes up most of the time, only needs to search at the neighbourhood the item is hashed at, which is small so it is about O(H) worst case. While Robin hood for smaller hashtables may perform better, the fact that searches in Hopscotch don't get slower while the hashtable has more entries make hopscotch a better fit for a program that is as intensive in searches as this one. Also hopscotch benefits from better cache locality. Cuckoo hashing has constant time find operations at O(1), so while it would be expected to be the fastest, in fact it is very 
 
-Given the joining pipeline and the pre-filtered input data, your task is to implement an efficient joining algorithm to accelerate the execution time of the joining pipeline. Specifically, you need to implement the following function in `src/execute.cpp`:
+## Robin Hood Hashing
+*Implemented by Iasonas Karaprodromidis (sdi2200064)*
 
-```C++
-ColumnarTable execute(const Plan& plan, void* context);
-```
+---
 
-Optionally, you can implement these two functions as well to prepare any global context (e.g., thread pool) to accelerate the execution.
+### Implementation Details
 
-```C++
-void* build_context();
-void destroy_context(void*);
-```
+#### Data Storage
 
-### Input format
+The hash map stores each bucket in a `struct` called `data`, which contains all the information needed for the Robin Hood algorithm. Each `data` struct includes:
 
-The input plan in the above function is defined as the following struct.
+- `kv`: a `std::pair` holding the key and value. Using a pair simplifies iterator implementation, allowing them to return elements directly as key-value pairs.  
+- `psl`: the probe sequence length.
+- `is_empty`: a boolean flag indicating whether the bucket is currently occupied.
 
-```C++
-struct ScanNode {
-    size_t base_table_id;
-};
+All buckets are stored in a `std::vector<data>`, allowing easy resizing during rehashing.
 
-struct JoinNode {
-    bool   build_left;
-    size_t left;
-    size_t right;
-    size_t left_attr;
-    size_t right_attr;
-};
+#### Hashing
+For hashing, I implemented the `FNV-1a` algorithm in both its 32-bit and 64-bit variants. I chose `FNV-1a` because it provides an excellent balance between speed and hash value distribution, effectively minimizing collisions. Since performance was a primary goal of this project, it was a natural choice.
 
-struct PlanNode {
-    std::variant<ScanNode, JoinNode>          data;
-    std::vector<std::tuple<size_t, DataType>> output_attrs;
-};
+Additionally, the hash table size is always a power of two rather than a prime number. This simplifies resizing—by simply doubling the capacity—and improves performance, as it allows the use of a bitmask instead of the slower modulo operation for computing indices.
 
-struct Plan {
-    std::vector<PlanNode>      nodes;
-    std::vector<ColumnarTable> inputs;
-    size_t root;
-}
-```
+#### Iterator
+I implemented two iterators—a mutable one and a constant one—to keep the design consistent with the STL. This ensures that functions returning iterators can be used flexibly in both mutable and read-only contexts.
 
-**Scan**:
-- The `base_table_id` member refers to which input table in the `inputs` member of a plan is used by the Scan node.
-- Each item in the `output_attrs` indicates which column in the base table should be output and what type it is.
+#### Insert / Emplace
+I implemented both `insert` and `emplace` (since the program uses `emplace`). The key difference is that `emplace` constructs the object in place, while `insert` first searches for the key.  
 
-**Join**:
-- The `build_left` member refers to which side the hash table should be built on, where `true` indicates building the hash table on the left child, and `false` indicates the opposite.
-- The `left` and `right` members are the indexes of the left and right child of the Join node in the `nodes` member of a plan, respectively.
-- The `left_attr` and `right_attr` members are the join condition of Join node. Supposing that there are two records, `left_record` and `right_record`, from the intermediate results of the left and right child, respectively. The members indicate that the two records should be joined when `left_record[left_attr] == right_record[right_attr]`.
-- Each item in the `output_attrs` indicates which column in the result of children should be output and what type it is. Supposing that the left child has $n_l$ columns and the right child has $n_r$ columns, the value of the index $i \in \{0, \dots, n_l + n_r - 1\}$, where the ranges $\{0, \dots, n_l - 1\}$ and $\{n_l, \dots, n_l + n_r - 1\}$ indicate the output column is from left and right child respectively.
+- If the key already exists, it returns an iterator to the existing element and `false`.  
+- Otherwise, it checks the load factor and triggers a rehash if necessary.  
 
-**Root**: The `root` member of a plan indicates which node is the root node of the execution plan tree.
+The insertion follows the Robin Hood strategy: it attempts to place the key at its ideal position (`PSL = 0`), displacing existing keys with smaller probe sequence lengths until an empty bucket is found. Finally, the function inserts the key and returns an iterator to the new element along with `true`.
 
-### Data format
+#### Find
 
-The input and output data both follow a simple columnar data format.
+The `find` function searches for a key in the hash map using Robin Hood linear probing. It starts at the key's ideal bucket (computed by the hash function) and increments the probe sequence length (PSL) while scanning.  
 
-```C++
-enum class DataType {
-    INT32,       // 4-byte integer
-    INT64,       // 8-byte integer
-    FP64,        // 8-byte floating point
-    VARCHAR,     // string of arbitary length
-};
+- If an empty bucket is encountered or the current bucket's PSL is less than the search PSL, the search stops early.  
+- If the key is found, it returns an iterator to that element; otherwise, it returns `end()`.
 
-constexpr size_t PAGE_SIZE = 8192;
+#### Unit Tests
 
-struct alignas(8) Page {
-    std::byte data[PAGE_SIZE];
-};
+I implemented comprehensive unit tests covering all core functionalities of the hashmap. These tests verify that basic operations—such as insertion, emplace, search, iteration, and clearing—work correctly under normal conditions.  
 
-struct Column {
-    DataType           type;
-    std::vector<Page*> pages;
-};
+Additionally, the tests include stress scenarios with a large number of insertions to ensure proper handling of collisions, automatic rehashing, and maintenance of the Robin Hood property. Special cases, such as using 64 bit integers, string and double keys, as well as const iterators, are also validated to ensure the hashmap behaves correctly and consistently in all expected usage patterns.
 
-struct ColumnarTable {
-    size_t              num_rows;
-    std::vector<Column> columns;
-};
-```
+# HOPSCOTCH ALGORITHM
 
-A `ColumnarTable` first stores how many rows the table has in the `num_rows` member, then stores each column seperately as a `Column`. Each `Column` has a type and stores the items of the column into several pages. Each page is of 8192 bytes. In each page:
+**Implemented by:** Kyriakos Kalafatsis 1115202200058
 
-- The first 2 bytes are a `uint16_t` which is the number of rows $n_r$ in the page.
-- The following 2 bytes are a `uint16_t` which is the number of non-`NULL` values $n_v$ in the page.
-- The first $n_r$ bits in the last $\left\lfloor\frac{(n_r + 7)}{8}\right\rfloor$ bytes is a bitmap indicating whether the corresponding row has value or is `NULL`.
+## Introduction
 
-**Fixed-length attribute**: There are $n_v$ contiguous values begins at the first aligned position. For example, in a `Page` of `INT32`, the first value is at `data + 4`. While in a `Page` of `INT64` and `FP64`, the first value is at `data + 8`.
+The Hopscotch hash table algorithm was implemented to be used with different key and value as a template, and the whole implementation exists in the hopscotch.h file.
+The other important file is the hopscotch_unit_tests.cpp, where all of the tests for the algorithms were written.
 
-**Variable-length attribute**: There are $n_v$ contigous offsets (`uint16_t`) begins at `data + 4` in a `Page`, followed by the content of the varchars which begins at `char_begin = data + 4 + n_r * 2`. Each offset indicates the ending offset of the corresponding `VARCHAR` with respect to the `char_begin`.
+## Implementation
+### Bitmaps - Neighborhoods
 
-**Long string**: When the length of a string is longer than `PAGE_SIZE - 7`, it can not fit in a normal page. Special pages will be used to store such string. If $n_r$ `== 0xffff` or $n_r$ `== 0xfffe`, the `Page` is a special page for long string. `0xffff` means the page is the first page of a long string and `0xfffe` means the page is the following page of a long string. The following 2 bytes is a `uint16_t` indicating the number of chars in the page, beginning at `data + 4`.
+The main bucket for each cell of the table consists of the pair Key-Value for the data, as well as a **64-bit unsigned integer**, which represents the **neighborhood** of the cell.
+Neighborhoods do not necessarily have to be 64 bits, however they cannot exceed that number (it would not be beneficial anyway, since we want them to fit within a cache line).
 
-## Requirement
+Each neighborhood bitmap uses the most significant bits (MSBs) to represent the closest cells to the home bucket.
+For example, if the neighborhood of the cell with index 5 is 100100010, it means that there are elements whose hash is 5 stored in indices 5, 8, and 12.
 
-- You can only modify the file `src/execute.cpp` in the project.
-- You must not use any third-party libraries. If you are using libraries for development (e.g., for logging), ensure to remove them before the final submission.
-- The joining pipeline (including order and build side) is optimized by PostgreSQL for `Hash Join` only. However, in the `execute` function, you are free to use other algorithms and change the pipeline, as long as the result is equivalent.
-- For any struct listed above, all of there members are public. You can manipulate them in free functions as desired as long as the original files are not changed and the manipulated objects can be destructed properly.
-- Your program will be evaluated on an unpublished benchmark sampled from the original JOB benchmark. You will not be able to access the test benchmark.
+This bit-based design allows for very fast lookup operations in the find() function, as bitwise operations are highly efficient.
 
-## Quick start
+### Iterator
 
-> [!TIP]
-> Run all the following commands in the root directory of this project.
+An iterator class was implemented to allow for simple traversal of the table.
+The iterator skips over empty buckets and only returns references to valid Key-Value pairs.
+It supports prefix increment (++it) and dereferencing (*it and ->) operations, as well as comparison operators for equality and inequality.
 
-First, download the imdb dataset.
+### Hashing
 
-```bash
-./download_imdb.sh
-```
+A custom hash function was used, to make the program a bit more efficient. It is a hybrid between multiple hash functions, depending on the type.
 
-Second, build the project.
+### Constructors
 
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
-cmake --build build -- -j $(nproc)
-```
+The class provides three constructors for flexibility:
 
-Third, prepare the DuckDB database for correctness checking.
+* **Default constructor:** Initializes a table with a default size (1024 buckets) and a default neighborhood length (32).
 
-```bash
-./build/build_database imdb.db
-```
+* **Size constructor:** Allows initialization with a given table size, using the default neighborhood length.
 
-Now, you can run the tests:
-```bash
-./build/run plans.json
-```
-> [!TIP]
-> If you want to use `Ninja Multi-Config` as the generator. The commands will look like:
-> 
->```bash
-> cmake -S . -B build -Wno-dev -G "Ninja Multi-Config"
-> cmake --build build --config Release -- -j $(nproc)
-> ./build/Release/build_database imdb.db
-> ./build/Release/run plans.json
-> ```
+* **Size + Neighborhood constructor:** Provides full control over both parameters, with an automatic adjustment ensuring the neighborhood never exceeds 64 bits or the table size.
 
-# Cache
-## This section is only for UNIX users
-There are 2 new executables with this repository. They cache the join tables and
-result of each query and mmap them for faster loading times and getting rid of duckdb.
+Internally, the constructor also adjusts the capacity to the next power of two to optimize hashing and bit masking operations. This is very important as we can use bit operations instead of the mod, which saves a lot of 
+computing time.
 
-To build the cache you need to run:
-```bash
-./build/build_cache plans.json
-```
+### Emplace
 
-> [!TIP] 
-> If you are using `Linux x86_64` you can download our prebuilt cache with:
-> ```
-> wget http://share.uoa.gr/protected/all-download/sigmod25/sigmod25_cache_x86.tar.gz
-> ```
-> If you are using `macOS arm64` you can download our prebuilt cache with:
-> ```
-> wget http://share.uoa.gr/protected/all-download/sigmod25/sigmod25_cache_arm.tar.gz
-> ```
-> For all other systems you will need to build the cache on your own.
+The algorithm used for the emplace follows the exercise directly. Some interesting points include: 
+* A function checking if the neighborhood is full (= checking if all the bits are 1)
+* The main Hopscotching algorithm, in a while loop ensuring correct placement of the item in its neighborhood
+* Rehashing in 3 spots, practically the load factor limit is never met, as the size is adjusted in the constructor if given
 
-After the cache is built you can run the queries using:
-```bash
-./build/fast plans.json
-```
+### Find
 
-Also after you have built the cache you no longer need to build the `run` executable
-every time (which depends on duckdb and can be slow to compile). Just compile 
-the executable that uses the cache:
-```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
-cmake --build build -- -j $(nproc) fast
-```
+The find function uses the bitmap of the home bucket to efficiently locate elements.
+Instead of iterating through all possible nearby buckets, it checks for the bits in a neighborhood, and only checks those with an item (set bits).
 
-Code is compiled with Clang 18.
+For each set bit, the algorithm computes the actual index, checks if the key matches, and returns an iterator if found.
+This approach ensures that search operations remain extremely fast, often requiring only a few bitwise checks and one or two memory lookups.
+
+### Rehash
+
+Rehashing, as mentioned, occurs automatically when:
+
+* The table exceeds the defined load factor limit
+
+* The home bucket’s neighborhood becomes full during insertion.
+
+* The Hopscotch algorithm cannot find any valid spots to move items
+
+
+### Unit Tests
+
+Comprehensive unit tests were written in the hopscotch_unit_tests.cpp file.
+The tests cover:
+
+* Basic insertions and lookups
+
+* Rehashing behavior
+
+* Iterator functionality
+
+* Type checking for all possible types
+
+* Stress Tests
+
+
+# Cuckoo Hashing
+
+Name: Delia-Maria
+Surname: Pachitac
+ID: 1115202200125
+
+# Implementation Details
+The implementation of cuckoo hashing contains a struct Data:
+- kv: a pair that contains the key and the value.
+- occupied: a variable indicating whether the bucket is occupied.
+
+The buckets are stored in two vectors, T1 and T2 (two arrays with the two different capacities).
+I choose to change the shared capacity into two dofferent ones for each table because th rehash was triggered based on the combined load factor of both tables. For example :
+Imagine the following situation:
+    -T1 has 16 elements and reaches 100% of its capacity
+    -T2 is  empty having 0 elements 
+In the old design the total load factory for both tables would be at 50% and we would double the size of both tables and reinsertall the elements . But in the T2 is still has plenty of free space and we may  pay an expensive cost for doubling T2. 
+
+
+# Hashing
+For hashing, we have two functions: h1 and h2.
+These functions are based on the FNV-1a algorithm for different key types (int32, int64, double, string).
+The table size is a power of two, allowing the use of bitmasking instead of modulo, which increases speed.
+
+# Emplace
+1. Check before inserting each table separetly if they have reached the load factory and rehash 
+
+2. Compute h1 and h2 for the key
+
+3. Try inserting (key, value) in T1[h1(key)]      
+    - If empty -> place it there        
+    - If occupied -> check for duplicates
+
+4. If it is a duplicate  , else  swap the existing element and try to move it to the second table based on the h2
+
+5. Continue swapping until either an empty spot is found or a cycle is detected.
+
+6. If a cycle occurs -> rehash the table (double capacity for both tables and reinsert all elements).
+
+# Find
+The find function checks the two possible positions:
+T1[h1(key)] or T2[h2(key)].
+If the key is found, it returns an iterator to that position; otherwise, it returns end().
+
+# Test Coverage Summary
+- Constructors  (Default constructorand size constructor)
+- Insertion with collisions
+- Insertion with cycle Detection and rehashing
+- Duplicate Key Handling
+- Find Function
+- Clear Function
+- Iterators
+- Multiple Key Types (int32, int64, double, std::string)
+
+# Complexity 
+After implementing and executing the 3 hashing algorithms, we realized that in the cuckoo hash when a  cycle occurs or the tables have reached the load factor, several swaps plus possible rehashing are required. This extra movement makes insertions slower compared to algorithms like robin hood or hopscotch. Also the cuckoo hashing accesses two separate tables, which requires more memory access and  it slows down the program. On the other side the other two algorithms operate in a single contiguous array making them faster.
