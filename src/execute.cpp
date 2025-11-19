@@ -7,7 +7,7 @@
 #include <hopscotch.h>
 #include <cstdlib>
 // SET TO 1 TO USE THIS HASHMAP, IF MULTIPLE ARE ACTIVE THE FIRST IN ORDER WILL BE USED, NONE ACTIVE AND UNORDERED_MAP WILL BE USED INSTEAD AS DEFAULT
-#define USE_RH 1
+#define USE_RH 0
 #define USE_CUCKOO 0
 #define USE_HOPSCOTCH 0
 
@@ -27,7 +27,7 @@ using HashTable = std::unordered_map<T, std::vector<size_t>>;
 
 namespace Contest {
 
-using ExecuteResult = std::vector<std::vector<Data>>;
+using ExecuteResult = std::vector<std::vector<Data>>; //Change this to value_t 
 
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
@@ -184,7 +184,7 @@ ExecuteResult execute_scan(const Plan&               plan,
     const std::vector<std::tuple<size_t, DataType>>& output_attrs) {
     auto                           table_id = scan.base_table_id;
     auto&                          input    = plan.inputs[table_id];
-    return Table::copy_scan(input, output_attrs);
+    return Table::copy_scan(input, output_attrs); //Don't use scan possibly, returns materialized table
 }
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
@@ -207,8 +207,8 @@ ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     auto ret_types  = plan.nodes[plan.root].output_attrs
                    | views::transform([](const auto& v) { return std::get<1>(v); })
                    | ranges::to<std::vector<DataType>>();
-    Table table{std::move(ret), std::move(ret_types)};
-    return table.to_columnar();
+    Table table{std::move(ret), std::move(ret_types)}; //Change to columnar
+    return table.to_columnar(); //Should remove after join returns columnar table instead of row
 }
 
 void* build_context() {
