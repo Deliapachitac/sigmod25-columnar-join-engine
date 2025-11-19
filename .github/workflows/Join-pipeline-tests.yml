@@ -1,0 +1,19 @@
+name: Join pipeline tests
+run-name: Testing join pipeline
+on: [push]
+jobs:
+  build-and-test:
+    runs-on:
+      group: k23a
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -Wno-dev
+      - run: cmake --build build --target all_tests -j $(nproc)
+
+      - run: ./build/unit_tests
+      - run: ./build/hopscotch_tests
+      - run: ./build/rh_unit_tests
+      - run: ./build/cuckoo_unit_tests
+      
+      - run: echo "🍏 This job's status is ${{ job.status }}."
