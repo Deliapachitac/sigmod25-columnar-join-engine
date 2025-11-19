@@ -11,4 +11,4 @@ struct value_t{
 std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
      const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id);
 
-std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<value_t>> table);
+std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<value_t>>& table, const Plan& plan);

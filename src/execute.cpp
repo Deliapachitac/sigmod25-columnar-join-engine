@@ -3,10 +3,10 @@
 #include <table.h>
 #include <iostream>
 #include <robin_hood.h>
+#include <table_reader.h>
 #include <cuckoo_hash.h>
 #include <hopscotch.h>
 #include <cstdlib>
-#include <table_scan.h>
 // SET TO 1 TO USE THIS HASHMAP, IF MULTIPLE ARE ACTIVE THE FIRST IN ORDER WILL BE USED, NONE ACTIVE AND UNORDERED_MAP WILL BE USED INSTEAD AS DEFAULT
 #define USE_RH 0
 #define USE_CUCKOO 0
@@ -29,6 +29,7 @@ using HashTable = std::unordered_map<T, std::vector<size_t>>;
 namespace Contest {
 
 using ExecuteResult = std::vector<std::vector<value_t>>; 
+
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
 
@@ -63,7 +64,7 @@ struct JoinAlgorithm {
                             throw std::runtime_error("wrong type of field");
                         }
                     },
-                    record[left_col].page_num);
+                    record[left_col]);
             }
             for (auto& right_record: right) {
                 std::visit(
@@ -90,7 +91,7 @@ struct JoinAlgorithm {
                             throw std::runtime_error("wrong type of field");
                         }
                     },
-                    right_record[right_col].page_num);
+                    right_record[right_col]);
             }
         } else {
             for (auto&& [idx, record]: right | views::enumerate) {
@@ -107,7 +108,7 @@ struct JoinAlgorithm {
                             throw std::runtime_error("wrong type of field");
                         }
                     },
-                    record[right_col].page_num);
+                    record[right_col]);
             }
             for (auto& left_record: left) {
                 std::visit(
@@ -134,7 +135,7 @@ struct JoinAlgorithm {
                             throw std::runtime_error("wrong type of field");
                         }
                     },
-                    left_record[left_col].page_num);
+                    left_record[left_col]);
             }
         }
     }
@@ -151,7 +152,7 @@ ExecuteResult execute_hash_join(const Plan&          plan,
     auto&                          right_types = right_node.output_attrs;
     auto                           left        = execute_impl(plan, left_idx);
     auto                           right       = execute_impl(plan, right_idx);
-    ExecuteResult                  results;
+    std::vector<std::vector<value_t>> results;
 
     JoinAlgorithm join_algorithm{.build_left = join.build_left,
         .left                                = left,
@@ -175,6 +176,7 @@ ExecuteResult execute_hash_join(const Plan&          plan,
         case DataType::VARCHAR: join_algorithm.run<std::string>(); break;
         }
     }
+
     return results;
 }
 
@@ -206,10 +208,8 @@ ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     auto ret_types  = plan.nodes[plan.root].output_attrs
                    | views::transform([](const auto& v) { return std::get<1>(v); })
                    | ranges::to<std::vector<DataType>>();
-
-    auto materialized_table = materialize_table(ret, plan.nodes[plan.root].output_attrs);
+    auto materialized_table = materialize_table(ret, plan);     
     Table table{std::move(materialized_table), std::move(ret_types)};
-    //Materialize here
     return table.to_columnar(); //Should remove after join returns columnar table instead of row
 }
 

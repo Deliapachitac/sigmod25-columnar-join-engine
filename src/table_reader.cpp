@@ -1,4 +1,4 @@
-#include <table_scan.h>
+#include <table_reader.h>
 #include <table.h>
 #include <inner_column.h>
 bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
@@ -94,4 +94,62 @@ std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
     };
     filter_tp.run(task, output_attrs.size());
     return results;
+}
+
+std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<value_t>>& table, const Plan& plan){
+    std::vector<std::vector<Data>> res(table.size(),
+        std::vector<Data>(table[0].size(), std::monostate{}));
+    for(int row = 0; row < table.size(); row++){
+        for(int column = 0; column < table[0].size(); column++ ){
+            const value_t& entry = table[row][column];
+            //If value is null, leave it as monostate
+            if(entry.data_idx == 0xFFFF){
+                continue;
+            }
+            //If value is int, combine fields and emplace it into result
+            else if (entry.data_idx == 0xFFFE){
+                int32_t value =
+                    (static_cast<int32_t>(entry.column_idx) << 16) |
+                    static_cast<int32_t>(entry.table_idx);
+                res[row][column].emplace<int32_t>(value);
+            }
+            //Value is string
+            else{
+                auto* page = plan.inputs[entry.table_idx].columns[entry.column_idx].pages[entry.page_idx]->data;
+                auto num_rows = *reinterpret_cast<uint16_t*>(page);
+                if (num_rows == 0xffff) {
+                    auto        num_chars  = *reinterpret_cast<uint16_t*>(page + 2);
+                    auto*       data_begin = reinterpret_cast<char*>(page + 4);
+                    std::string value{data_begin, data_begin + num_chars};
+                    res[row][column].emplace<std::string>(std::move(value));
+                } else if (num_rows == 0xfffe) {
+                    auto  num_chars  = *reinterpret_cast<uint16_t*>(page + 2);
+                    auto* data_begin = reinterpret_cast<char*>(page + 4);
+                    std::visit(
+                        [data_begin, num_chars](auto& value) {
+                            using T = std::decay_t<decltype(value)>;
+                            if constexpr (std::is_same_v<T, std::string>) {
+                                value.insert(value.end(), data_begin, data_begin + num_chars);
+                            } else {
+                                throw std::runtime_error(
+                                    "long string page 0xfffe must follow a string");
+                            }
+                        },
+                        res[row][column]);
+                } else {
+                    auto  num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+                    auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
+                    auto* data_begin   = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
+                    auto  old_offset = entry.data_idx ? offset_begin[(entry.data_idx)-1] : 0;
+                    auto* string_begin = data_begin + old_offset;
+                    auto  offset = offset_begin[entry.data_idx];
+                    
+                    std::string value{string_begin, data_begin + offset};
+
+                    res[row][column].emplace<std::string>(std::move(value));
+                }
+            }
+        }
+    }
+    return res;
 }
