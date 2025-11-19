@@ -130,5 +130,12 @@ target_include_directories(hopscotch_tests PRIVATE include)
 target_include_directories(rh_unit_tests PRIVATE include)
 target_include_directories(cuckoo_unit_tests PRIVATE include)
 
+add_custom_target(all_tests
+    DEPENDS
+        unit_tests
+        hopscotch_tests
+        rh_unit_tests
+        cuckoo_unit_tests
+)
 
 
