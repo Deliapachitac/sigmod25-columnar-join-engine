@@ -46,7 +46,7 @@ struct JoinAlgorithm {
         
         if (build_left) { 
             for (auto&& [idx, record]: left | views::enumerate) {
-
+                if(record[left_col].data_idx == 0xFFFF) continue;
                 auto key = ((int32_t(record[left_col].column_idx) & 0xFFFF) << 16) |
                                 (int32_t(record[left_col].table_idx)  & 0xFFFF);
                 if (key >= 0) {
@@ -61,8 +61,10 @@ struct JoinAlgorithm {
                     
             }
             for (auto& right_record: right) {
+                if(right_record[right_col].data_idx == 0xFFFF) continue;
                 auto key = ((int32_t(right_record[right_col].column_idx) & 0xFFFF) << 16) |
                                 (int32_t(right_record[right_col].table_idx)  & 0xFFFF);
+
                 if (key >= 0) {
                     if (auto itr = hash_table.find(key); itr != hash_table.end()) {
                         for (auto left_idx: itr->second) {
@@ -86,6 +88,7 @@ struct JoinAlgorithm {
             }
         } else {
             for (auto&& [idx, record]: right | views::enumerate) {
+                if(record[right_col].data_idx == 0xFFFF) continue;
                 auto key = ((int32_t(record[right_col].column_idx) & 0xFFFF) << 16) |
                                 (int32_t(record[right_col].table_idx)  & 0xFFFF);
 
@@ -100,6 +103,7 @@ struct JoinAlgorithm {
                 }
             }
             for (auto& left_record: left) {
+                if(left_record[left_col].data_idx == 0xFFFF) continue;
                 auto key = ((int32_t(left_record[left_col].column_idx) & 0xFFFF) << 16) |
                                 (int32_t(left_record[left_col].table_idx)  & 0xFFFF);
                 if (key >= 0) {

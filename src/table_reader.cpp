@@ -93,6 +93,7 @@ std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
                 page_idx++;
             }
         }
+
     };
     filter_tp.run(task, output_attrs.size());
     return results;
