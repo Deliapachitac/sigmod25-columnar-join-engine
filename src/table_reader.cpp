@@ -3,7 +3,10 @@
 #include <iostream>
 #include <inner_column.h>
 namespace helper{
-    bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
+    constexpr uint16_t NULL_VALUE = 0xFFFF;
+    constexpr uint16_t INT_VALUE     = 0xFFFE;
+
+    inline bool get_bitmap(const uint8_t* bitmap, uint16_t idx) {
         auto byte_idx = idx / 8;
         auto bit      = idx % 8;
         return bitmap[byte_idx] & (1u << bit);
@@ -14,26 +17,26 @@ namespace helper{
         record.table_idx = 0;
         record.column_idx = 0;
         record.page_idx = 0;
-        record.data_idx = 0xFFFF; //Indicates null value, should be converted to monostate after table materialization
+        record.data_idx = NULL_VALUE; 
         return record;
     }
 
-    void set_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
-        while (bitmap.size() < idx / 8 + 1) {
-            bitmap.emplace_back(0);
-        }
-        auto byte_idx     = idx / 8;
-        auto bit          = idx % 8;
-        bitmap[byte_idx] |= (1u << bit);
+    inline void ensure_bitmap_size(std::vector<uint8_t>& bitmap, uint16_t idx) {
+        size_t needed = idx / 8 + 1;
+        if (bitmap.size() < needed) bitmap.resize(needed);
+    }
+    inline void set_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
+        ensure_bitmap_size(bitmap, idx);
+        auto byte_idx = idx / 8;
+        auto bit      = idx % 8;
+        bitmap[byte_idx] |= static_cast<uint8_t>(1u << bit);
     }
 
-    void unset_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
-        while (bitmap.size() < idx / 8 + 1) {
-            bitmap.emplace_back(0);
-        }
-        auto byte_idx     = idx / 8;
-        auto bit          = idx % 8;
-        bitmap[byte_idx] &= ~(1u << bit);
+    inline void unset_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
+        ensure_bitmap_size(bitmap, idx);
+        auto byte_idx = idx / 8;
+        auto bit      = idx % 8;
+        bitmap[byte_idx] &= static_cast<uint8_t>(~(1u << bit));
     }
 };
 
@@ -64,7 +67,7 @@ std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
                             if (row_idx >= table.num_rows) {
                                 throw std::runtime_error("row_idx");
                             }
-                            results[row_idx][column_idx].data_idx = 0xFFFE; //0xFFFE indicates int, bits will be stored in table and column_idx
+                            results[row_idx][column_idx].data_idx = helper::INT_VALUE; //0xFFFE indicates int, bits will be stored in table and column_idx
                             results[row_idx][column_idx].table_idx = value & 0xFFFF; //Lower 16 bits of value
                             results[row_idx][column_idx].column_idx = (value >> 16) & 0xFFFF; //Higher 16 bits of value;
                             row_idx++;
@@ -123,15 +126,15 @@ std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<v
     }
     std::vector<std::vector<Data>> res(table.size(),
         std::vector<Data>(table[0].size(), std::monostate{}));
-    for(int row = 0; row < table.size(); row++){
-        for(int column = 0; column < table[0].size(); column++ ){
+    for(size_t row = 0; row < table.size(); row++){
+        for(size_t column = 0; column < table[0].size(); column++ ){
             const value_t& entry = table[row][column];
             //If value is null, leave it as monostate
-            if(entry.data_idx == 0xFFFF){
+            if(entry.data_idx == helper::NULL_VALUE){
                 continue;
             }
             //If value is int, combine fields and emplace it into result
-            else if (entry.data_idx == 0xFFFE){
+            else if (entry.data_idx == helper::INT_VALUE){
                 int32_t value =
                     (static_cast<int32_t>(entry.column_idx) << 16) |
                     static_cast<int32_t>(entry.table_idx);
@@ -186,8 +189,7 @@ std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<v
     return res;
 }
 
-std::string materialize_string(const value_t string_meta, const Plan& plan){
-    std::string value;
+void materialize_string(const value_t string_meta, const Plan& plan, std::string& value){
     uint16_t page_idx = string_meta.page_idx;
     auto& page_vector = plan.inputs[string_meta.table_idx].columns[string_meta.column_idx].pages;
     auto* page = page_vector[page_idx++]->data;
@@ -222,7 +224,6 @@ std::string materialize_string(const value_t string_meta, const Plan& plan){
         
         value = std::string{string_begin, data_begin + offset};
     }
-    return value;
 }
 ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>& table, 
                                         const Plan& plan, 
@@ -253,7 +254,7 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
             };
             for (auto& record: table) {
                 auto& value = record[col_idx];
-                if (value.data_idx == 0xFFFE) {
+                if (value.data_idx == helper::INT_VALUE) {
                     if (4 + (data.size() + 1) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
                         save_page();
                     }
@@ -262,7 +263,7 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
                                 (int32_t(value.table_idx)  & 0xFFFF);
                     data.emplace_back(combined_value);
                     ++num_rows;
-                } else if (value.data_idx == 0xFFFF) {
+                } else if (value.data_idx == helper::NULL_VALUE) {
                     if (4 + (data.size()) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
                         save_page();
                     }
@@ -317,8 +318,9 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
                 auto& string_meta = record[col_idx];
                 
                 
-                if (string_meta.data_idx != 0xFFFF && string_meta.data_idx != 0xFFFE) {
-                    std::string value = materialize_string(string_meta, plan);
+                if (string_meta.data_idx != helper::NULL_VALUE && string_meta.data_idx != helper::INT_VALUE) {
+                    std::string value;
+                    materialize_string(string_meta, plan, value);
                     if (value.size() > PAGE_SIZE - 7) {
                         if (num_rows > 0) {
                             save_page();
@@ -335,7 +337,7 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
                         offsets.emplace_back(data.size());
                         ++num_rows;
                     }
-                } else if (string_meta.data_idx == 0xFFFF) {
+                } else if (string_meta.data_idx == helper::NULL_VALUE) {
                     if (4 + offsets.size() * 2 + data.size() + (num_rows / 8 + 1)
                         > PAGE_SIZE) {
                         save_page();
