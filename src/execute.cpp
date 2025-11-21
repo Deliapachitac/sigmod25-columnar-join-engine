@@ -186,9 +186,9 @@ ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     auto ret_types  = plan.nodes[plan.root].output_attrs
                    | views::transform([](const auto& v) { return std::get<1>(v); })
                    | ranges::to<std::vector<DataType>>();
-    auto materialized_table = materialize_table(ret, plan);     
-    Table table{std::move(materialized_table), std::move(ret_types)};
-    return table.to_columnar(); //Should remove after join returns columnar table instead of row
+    //auto materialized_table = materialize_table(ret, plan);     
+    //Table table{std::move(materialized_table), std::move(ret_types)};
+    return materialize_columnar_table(ret, plan, ret_types); //Should remove after join returns columnar table instead of row
 }
 
 void* build_context() {

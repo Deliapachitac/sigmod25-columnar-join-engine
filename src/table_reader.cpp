@@ -17,6 +17,24 @@ namespace helper{
         record.data_idx = 0xFFFF; //Indicates null value, should be converted to monostate after table materialization
         return record;
     }
+
+    void set_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
+        while (bitmap.size() < idx / 8 + 1) {
+            bitmap.emplace_back(0);
+        }
+        auto byte_idx     = idx / 8;
+        auto bit          = idx % 8;
+        bitmap[byte_idx] |= (1u << bit);
+    }
+
+    void unset_bitmap(std::vector<uint8_t>& bitmap, uint16_t idx) {
+        while (bitmap.size() < idx / 8 + 1) {
+            bitmap.emplace_back(0);
+        }
+        auto byte_idx     = idx / 8;
+        auto bit          = idx % 8;
+        bitmap[byte_idx] &= ~(1u << bit);
+    }
 };
 
 std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
@@ -166,4 +184,175 @@ std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<v
         }
     }
     return res;
+}
+
+std::string materialize_string(const value_t string_meta, const Plan& plan){
+    std::string value;
+    uint16_t page_idx = string_meta.page_idx;
+    auto& page_vector = plan.inputs[string_meta.table_idx].columns[string_meta.column_idx].pages;
+    auto* page = page_vector[page_idx++]->data;
+    auto num_rows = *reinterpret_cast<uint16_t*>(page);
+    //Long string handling error
+    if (num_rows == 0xffff) {
+        auto        num_chars  = *reinterpret_cast<uint16_t*>(page + 2);
+        auto*       data_begin = reinterpret_cast<char*>(page + 4);
+        value = std::string{data_begin, data_begin + num_chars};
+        while (page_idx < page_vector.size()){
+            page = page_vector[page_idx++]->data;
+            num_rows = *reinterpret_cast<uint16_t*>(page);
+            if(num_rows != 0xfffe) break;
+            num_chars  = *reinterpret_cast<uint16_t*>(page + 2);
+            data_begin = reinterpret_cast<char*>(page + 4);
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, std::string>) {
+                value.insert(value.end(), data_begin, data_begin + num_chars);
+            } else {
+                throw std::runtime_error(
+                    "long string page 0xfffe must follow a string");
+            }     
+        }
+    }
+    else {
+        auto  num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+        auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
+        auto* data_begin   = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
+        auto  old_offset = string_meta.data_idx ? offset_begin[(string_meta.data_idx)-1] : 0;
+        auto* string_begin = data_begin + old_offset;
+        auto  offset = offset_begin[string_meta.data_idx];
+        
+        value = std::string{string_begin, data_begin + offset};
+    }
+    return value;
+}
+ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>& table, 
+                                        const Plan& plan, 
+                                        const std::vector<DataType>& data_types
+    ) {
+    namespace views  = ranges::views;
+    ColumnarTable ret;
+    ret.num_rows = table.size();
+    for (auto [col_idx, data_type]: data_types | views::enumerate) {
+        ret.columns.emplace_back(data_type);
+        auto& column = ret.columns.back();
+        switch (data_type) {
+        case DataType::INT32: {
+            uint16_t             num_rows = 0;
+            std::vector<int32_t> data;
+            std::vector<uint8_t> bitmap;
+            data.reserve(2048);
+            bitmap.reserve(256);
+            auto save_page = [&column, &num_rows, &data, &bitmap]() {
+                auto* page                             = column.new_page()->data;
+                *reinterpret_cast<uint16_t*>(page)     = num_rows;
+                *reinterpret_cast<uint16_t*>(page + 2) = static_cast<uint16_t>(data.size());
+                memcpy(page + 4, data.data(), data.size() * 4);
+                memcpy(page + PAGE_SIZE - bitmap.size(), bitmap.data(), bitmap.size());
+                num_rows = 0;
+                data.clear();
+                bitmap.clear();
+            };
+            for (auto& record: table) {
+                auto& value = record[col_idx];
+                if (value.data_idx == 0xFFFE) {
+                    if (4 + (data.size() + 1) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
+                        save_page();
+                    }
+                    helper::set_bitmap(bitmap, num_rows);
+                    auto combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |
+                                (int32_t(value.table_idx)  & 0xFFFF);
+                    data.emplace_back(combined_value);
+                    ++num_rows;
+                } else if (value.data_idx == 0xFFFF) {
+                    if (4 + (data.size()) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
+                        save_page();
+                    }
+                    helper::unset_bitmap(bitmap, num_rows);
+                    ++num_rows;
+                }
+                   
+            }
+            if (num_rows != 0) {
+                save_page();
+            }
+            break;
+        }
+        case DataType::VARCHAR: {
+            uint16_t              num_rows = 0;
+            std::vector<char>     data;
+            std::vector<uint16_t> offsets;
+            std::vector<uint8_t>  bitmap;
+            data.reserve(8192);
+            offsets.reserve(4096);
+            bitmap.reserve(512);
+            auto save_long_string = [&column](std::string_view data) {
+                size_t offset     = 0;
+                auto   first_page = true;
+                while (offset < data.size()) {
+                    auto* page = column.new_page()->data;
+                    if (first_page) {
+                        *reinterpret_cast<uint16_t*>(page) = 0xffff;
+                        first_page                         = false;
+                    } else {
+                        *reinterpret_cast<uint16_t*>(page) = 0xfffe;
+                    }
+                    auto page_data_len = std::min(data.size() - offset, PAGE_SIZE - 4);
+                    *reinterpret_cast<uint16_t*>(page + 2) = page_data_len;
+                    memcpy(page + 4, data.data() + offset, page_data_len);
+                    offset += page_data_len;
+                }
+            };
+            auto save_page = [&column, &num_rows, &data, &offsets, &bitmap]() {
+                auto* page                             = column.new_page()->data;
+                *reinterpret_cast<uint16_t*>(page)     = num_rows;
+                *reinterpret_cast<uint16_t*>(page + 2) = static_cast<uint16_t>(offsets.size());
+                memcpy(page + 4, offsets.data(), offsets.size() * 2);
+                memcpy(page + 4 + offsets.size() * 2, data.data(), data.size());
+                memcpy(page + PAGE_SIZE - bitmap.size(), bitmap.data(), bitmap.size());
+                num_rows = 0;
+                data.clear();
+                offsets.clear();
+                bitmap.clear();
+            };
+            for (auto& record: table) {
+                auto& string_meta = record[col_idx];
+                
+                
+                if (string_meta.data_idx != 0xFFFF && string_meta.data_idx != 0xFFFE) {
+                    std::string value = materialize_string(string_meta, plan);
+                    if (value.size() > PAGE_SIZE - 7) {
+                        if (num_rows > 0) {
+                            save_page();
+                        }
+                        save_long_string(value);
+                    } else {
+                        if (4 + (offsets.size() + 1) * 2 + (data.size() + value.size())
+                                + (num_rows / 8 + 1)
+                            > PAGE_SIZE) {
+                            save_page();
+                        }
+                        helper::set_bitmap(bitmap, num_rows);
+                        data.insert(data.end(), value.begin(), value.end());
+                        offsets.emplace_back(data.size());
+                        ++num_rows;
+                    }
+                } else if (string_meta.data_idx == 0xFFFF) {
+                    if (4 + offsets.size() * 2 + data.size() + (num_rows / 8 + 1)
+                        > PAGE_SIZE) {
+                        save_page();
+                    }
+                    helper::unset_bitmap(bitmap, num_rows);
+                    ++num_rows;
+                } else {
+                    throw std::runtime_error("not string or null");
+                }
+                    
+            }
+            if (num_rows != 0) {
+                save_page();
+            }
+            break;
+        }
+        }
+    }
+    return ret;
 }
