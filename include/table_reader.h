@@ -8,7 +8,11 @@ struct value_t{
     uint16_t data_idx;
 };
 
-std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
-     const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id);
+std::vector<std::vector<value_t>> scan_table(const ColumnarTable& ,
+     const std::vector<std::tuple<size_t, DataType>>& , const size_t& );
 
-std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<value_t>>& table, const Plan& plan);
+std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<value_t>>& , const Plan& );
+
+ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>& , 
+                                        const Plan& , 
+                                        const std::vector<DataType>& );
