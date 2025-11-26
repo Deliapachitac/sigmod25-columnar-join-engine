@@ -8,6 +8,20 @@ struct value_t{
     uint16_t data_idx;
 };
 
+
+// Structs for the second part of the project (columnar storage)
+struct buffer_page{
+
+    std:: vector<value_t> values;
+    DataType           type;
+    size_t  capacity;
+};
+
+struct column_t{
+    std::vector<buffer_page*>    pages;
+    size_t     total_rows=0 ; // initialize total_rows to 0
+};
+
 std::vector<std::vector<value_t>> scan_table(const ColumnarTable& ,
      const std::vector<std::tuple<size_t, DataType>>& , const size_t& );
 

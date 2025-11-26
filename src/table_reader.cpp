@@ -225,6 +225,8 @@ void materialize_string(const value_t string_meta, const Plan& plan, std::string
         value = std::string{string_begin, data_begin + offset};
     }
 }
+
+
 ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>& table, 
                                         const Plan& plan, 
                                         const std::vector<DataType>& data_types
