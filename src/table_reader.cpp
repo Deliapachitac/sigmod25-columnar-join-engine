@@ -360,3 +360,94 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
     }
     return ret;
 }
+
+
+///////////////////////////////////////////////////////////////
+/////////// START OF COLUMNAR STORAGE CODE //////////////////////
+////////////////////////EXERCISE 2 ////////////////////////////
+///////////////////////////////////////////////////////////////
+
+
+std::vector<column_t> scan_column_table(const ColumnarTable& table,
+    const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id)
+{
+
+    namespace views = ranges::views;
+    std::vector<column_t> results;
+    results.reserve(output_attrs.size());
+
+    // initialize output columns
+    for (auto& [in_col_idx, dtype] : output_attrs) {
+        column_t out;
+        out.num_rows = table.num_rows;
+        out.columns.emplace_back(Column(dtype));
+        results.push_back(std::move(out));
+    }
+
+    auto task = [&](size_t begin, size_t end) {
+        for (size_t column_idx = begin; column_idx < end; ++column_idx) {
+            size_t in_col_idx = std::get<0>(output_attrs[column_idx]);
+            auto& in_col = table.columns[in_col_idx];
+            auto& out_col = results[column_idx].columns[0];
+            MyColumnInserter inserter(out_col);
+
+            uint16_t page_idx = 0;
+            size_t row_idx = 0;
+
+            for (auto* page : in_col.pages) {
+                switch (in_col.type) {
+                case DataType::INT32: {
+                    auto num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                    auto* data_begin = reinterpret_cast<int32_t*>(page->data + 4);
+                    auto* bitmap = reinterpret_cast<uint8_t*>(
+                        page->data + PAGE_SIZE - (num_rows + 7) / 8);
+
+                    uint16_t data_idx = 0;
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        if (helper::get_bitmap(bitmap, i)) {
+                            auto value = data_begin[data_idx++];
+                            
+                            inserter.insert_value(
+                                value & 0xFFFF,              // table_idx (low bits)
+                                (value >> 16) & 0xFFFF,      // column_idx (high bits)
+                                helper::INT_VALUE            // mark as int
+                            );
+                        } else {
+                            inserter.insert_null(table_id, in_col_idx);
+                        }
+                        ++row_idx;
+                    }
+                    break;
+                }
+                case DataType::VARCHAR: {
+                    auto num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                    if (num_rows == 0xffff) {
+                        inserter.insert_value(table_id, in_col_idx, 0);
+                        ++row_idx;
+                    } else if (num_rows != 0xfffe) {
+                        auto* bitmap = reinterpret_cast<uint8_t*>(
+                            page->data + PAGE_SIZE - (num_rows + 7) / 8);
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (helper::get_bitmap(bitmap, i)) {
+                                inserter.insert_value(table_id, in_col_idx, data_idx++);
+                            } else {
+                                inserter.insert_null(table_id, in_col_idx);
+                            }
+                            ++row_idx;
+                        }
+                    }
+                    break;
+                }
+                }
+                ++page_idx;
+            }
+            inserter.finalize();
+        }
+    };
+
+    filter_tp.run(task, output_attrs.size());
+    return results;
+}
+
+
