@@ -24,11 +24,9 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
 ///////////////////////////////////////////////////////////////
                                         
 // Structs for the second part of the project (columnar storage)
-struct Column {
+struct MyColumn {
     DataType  type;         
     std::vector<Page*> pages;
-
-    Column(DataType t) : type(t) {}
 
     Page* new_page() {
         auto ret = new Page;
@@ -37,10 +35,10 @@ struct Column {
     }
 
     //constructor
-    Column(DataType data_type): type(data_type), pages() {}
+    MyColumn(DataType data_type): type(data_type), pages() {}
 
     //destructor
-    ~Column() {
+    ~MyColumn() {
         for (auto* p : pages) {
             delete p;
         }
