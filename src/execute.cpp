@@ -24,7 +24,7 @@ using HashTable = std::unordered_map<int32_t, std::vector<size_t>>;
 
 namespace Contest {
 
-using ExecuteResult = std::vector<std::vector<value_t>>; 
+using ExecuteResult = std::vector<column_t>; 
 
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
@@ -44,92 +44,121 @@ struct JoinAlgorithm {
         HashTable hash_table(sz);
 
         
-        if (build_left) { 
-            for (auto&& [idx, record]: left | views::enumerate) {
-                if(record[left_col].data_idx == 0xFFFF) continue;
-                auto key = ((int32_t(record[left_col].column_idx) & 0xFFFF) << 16) |
-                                (int32_t(record[left_col].table_idx)  & 0xFFFF);
-                if (key >= 0) {
-                    if (auto itr = hash_table.find(key); itr == hash_table.end()) {
-                        hash_table.emplace(key, std::vector<size_t>(1, idx));
-                    } else {
-                        itr->second.push_back(idx);
-                    }
-                } else {
-                    throw std::runtime_error("wrong type of field");
-                }
-                    
-            }
-            for (auto& right_record: right) {
-                if(right_record[right_col].data_idx == 0xFFFF) continue;
-                auto key = ((int32_t(right_record[right_col].column_idx) & 0xFFFF) << 16) |
-                                (int32_t(right_record[right_col].table_idx)  & 0xFFFF);
+        // if (build_left) { 
 
-                if (key >= 0) {
-                    if (auto itr = hash_table.find(key); itr != hash_table.end()) {
-                        for (auto left_idx: itr->second) {
-                            auto&             left_record = left[left_idx];
-                            std::vector<value_t> new_record;
-                            new_record.reserve(output_attrs.size());
-                            for (auto [col_idx, _]: output_attrs) {
-                                if (col_idx < left_record.size()) {
-                                    new_record.emplace_back(left_record[col_idx]);
-                                } else {
-                                    new_record.emplace_back(
-                                        right_record[col_idx - left_record.size()]);
-                                }
-                            }
-                            results.emplace_back(std::move(new_record));
-                        }
-                    }
-                } else {
-                    throw std::runtime_error("wrong type of field");
-                }      
-            }
-        } else {
-            for (auto&& [idx, record]: right | views::enumerate) {
-                if(record[right_col].data_idx == 0xFFFF) continue;
-                auto key = ((int32_t(record[right_col].column_idx) & 0xFFFF) << 16) |
-                                (int32_t(record[right_col].table_idx)  & 0xFFFF);
+        // The build_left decided which side to build the hash table on row store 
+        //Now in column store the key is just in one column so it does not matter which side we build on
+        //choose build side
+        auto& build_side = build_left ? left[left_col] : right[right_col];
+        auto& probe_side = build_left ? right[right_col] : left[left_col];
 
-                if (key >= 0) {
-                    if (auto itr = hash_table.find(key); itr == hash_table.end()) {
-                        hash_table.emplace(key, std::vector<size_t>(1, idx));
-                    } else {
-                        itr->second.push_back(idx);
-                    }
-                } else {
-                    throw std::runtime_error("wrong type of field");
-                }
+        //Iterates over the pages of the join column and hash the entry key
+        for (auto* page: build_side.columns[0].pages) {
+
+            auto* page_buffer = reinterpret_cast<value_t*>(page->data);
+            size_t entries = PAGE_SIZE / sizeof(value_t);
+            for (size_t i = 0; i < entries; ++i) {
+                value_t record = page_buffer[i];
+                if (record.data_idx == 0xFFFF) continue;
+                auto key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
+                                (int32_t(record.table_idx)  & 0xFFFF);
+                hash_table[key].push_back(i); // store row index
+           
             }
-            for (auto& left_record: left) {
-                if(left_record[left_col].data_idx == 0xFFFF) continue;
-                auto key = ((int32_t(left_record[left_col].column_idx) & 0xFFFF) << 16) |
-                                (int32_t(left_record[left_col].table_idx)  & 0xFFFF);
-                if (key >= 0) {
-                    if (auto itr = hash_table.find(key); itr != hash_table.end()) {
-                        for (auto right_idx: itr->second) {
-                            auto&             right_record = right[right_idx];
-                            std::vector<value_t> new_record;
-                            new_record.reserve(output_attrs.size());
-                            for (auto [col_idx, _]: output_attrs) {
-                                if (col_idx < left_record.size()) {
-                                    new_record.emplace_back(left_record[col_idx]);
-                                } else {
-                                    new_record.emplace_back(
-                                        right_record[col_idx - left_record.size()]);
-                                }
-                            }
-                            results.emplace_back(std::move(new_record));
-                        }
-                    }
-                } else {
-                    throw std::runtime_error("wrong type of field");
-                }
-                    
-            }
+                
         }
+
+        //
+        for (auto* page : probe_side.columns[0].pages) {
+            auto* buf = reinterpret_cast<value_t*>(page->data);
+            size_t entries = PAGE_SIZE / sizeof(value_t);
+
+            for (size_t i = 0; i < entries; ++i) {
+                value_t probe_val = buf[i];
+                if (probe_val.data_idx == 0xFFFF) continue; // skip NULLs
+
+                // Compute join key
+                int32_t key = ((int32_t(probe_val.column_idx) & 0xFFFF) << 16) |
+                            (int32_t(probe_val.table_idx)  & 0xFFFF);
+
+                if (auto itr = hash_table.find(key); itr != hash_table.end()) {
+                    for (auto build_idx : itr->second) {
+                        // For each output column, append the correct source value
+                        for (size_t out_idx = 0; out_idx < output_attrs.size(); ++out_idx) {
+                            auto& out_col = results[out_idx].columns[0];
+                            MyColumnInserter inserter(out_col);
+
+                            size_t in_col_idx = std::get<0>(output_attrs[out_idx]);
+
+                            // Decide whether this output attribute comes from left or right
+                            if (in_col_idx < left.size()) {
+                                // Take from left build side
+                                auto* build_buf = reinterpret_cast<value_t*>(
+                                    build_side.columns[0].pages[0]->data);
+                                value_t src = build_buf[build_idx];
+                                inserter.insert_value(src.table_idx, src.column_idx, src.data_idx);
+                            } else {
+                                // Take from right probe side
+                                value_t src = probe_val;
+                                inserter.insert_value(src.table_idx, src.column_idx, src.data_idx);
+                            }
+                        }
+
+                        // Update row count
+                        for (auto& col : results) {
+                            col.num_rows++;
+                        }
+                    }
+                }
+            }
+
+        }
+
+               
     }
+
+        // } else {
+        //     for (auto&& [idx, record]: right | views::enumerate) {
+        //         if(record[right_col].data_idx == 0xFFFF) continue;
+        //         auto key = ((int32_t(record[right_col].column_idx) & 0xFFFF) << 16) |
+        //                         (int32_t(record[right_col].table_idx)  & 0xFFFF);
+        //         if (key >= 0) {
+        //             if (auto itr = hash_table.find(key); itr == hash_table.end()) {
+        //                 hash_table.emplace(key, std::vector<size_t>(1, idx));
+        //             } else {
+        //                 itr->second.push_back(idx);
+        //             }
+        //         } else {
+        //             throw std::runtime_error("wrong type of field");
+        //         }
+        //     }
+        //     for (auto& left_record: left) {
+        //         if(left_record[left_col].data_idx == 0xFFFF) continue;
+        //         auto key = ((int32_t(left_record[left_col].column_idx) & 0xFFFF) << 16) |
+        //                         (int32_t(left_record[left_col].table_idx)  & 0xFFFF);
+        //         if (key >= 0) {
+        //             if (auto itr = hash_table.find(key); itr != hash_table.end()) {
+        //                 for (auto right_idx: itr->second) {
+        //                     auto&             right_record = right[right_idx];
+        //                     std::vector<value_t> new_record;
+        //                     new_record.reserve(output_attrs.size());
+        //                     for (auto [col_idx, _]: output_attrs) {
+        //                         if (col_idx < left_record.size()) {
+        //                             new_record.emplace_back(left_record[col_idx]);
+        //                         } else {
+        //                             new_record.emplace_back(
+        //                                 right_record[col_idx - left_record.size()]);
+        //                         }
+        //                     }
+        //                     results.emplace_back(std::move(new_record));
+        //                 }
+        //             }
+        //         } else {
+        //             throw std::runtime_error("wrong type of field");
+        //         }                 
+        //     }
+        // }
+    
 };
 
 ExecuteResult execute_hash_join(const Plan&          plan,
@@ -143,7 +172,7 @@ ExecuteResult execute_hash_join(const Plan&          plan,
     auto&                          right_types = right_node.output_attrs;
     auto                           left        = execute_impl(plan, left_idx);
     auto                           right       = execute_impl(plan, right_idx);
-    std::vector<std::vector<value_t>> results;
+    std::vector<column_t> results;
 
     JoinAlgorithm join_algorithm{.build_left = join.build_left,
         .left                                = left,
@@ -163,7 +192,7 @@ ExecuteResult execute_scan(const Plan&               plan,
     const std::vector<std::tuple<size_t, DataType>>& output_attrs) {
     auto                           table_id = scan.base_table_id;
     auto&                          input    = plan.inputs[table_id];
-    return scan_table(input, output_attrs, table_id); 
+    return scan_column_table(input, output_attrs, table_id); 
 }
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx) {
@@ -186,7 +215,7 @@ ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     auto ret_types  = plan.nodes[plan.root].output_attrs
                    | views::transform([](const auto& v) { return std::get<1>(v); })
                    | ranges::to<std::vector<DataType>>();
-    return materialize_columnar_table(ret, plan, ret_types); 
+    return convert_column_t_to_columnar(ret, plan, ret_types); 
 }
 void* build_context() {
     return nullptr;

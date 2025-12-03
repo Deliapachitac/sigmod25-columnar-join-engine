@@ -374,18 +374,20 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
 
     namespace views = ranges::views;
     std::vector<column_t> results;
-    results.reserve(output_attrs.size());
+    results.reserve(output_attrs.size()); // reserve space for the collumns(size of output_attrs = number of columns)
 
-    // initialize output columns
+    //initialising the structs for each output  attribute
     for (auto& [in_col_idx, dtype] : output_attrs) {
         column_t out;
         out.num_rows = table.num_rows;
-        out.columns.emplace_back(Column(dtype));
+        out.columns.emplace_back(MyColumn(dtype));
         results.push_back(std::move(out));
     }
 
     auto task = [&](size_t begin, size_t end) {
+
         for (size_t column_idx = begin; column_idx < end; ++column_idx) {
+
             size_t in_col_idx = std::get<0>(output_attrs[column_idx]);
             auto& in_col = table.columns[in_col_idx];
             auto& out_col = results[column_idx].columns[0];
@@ -397,57 +399,92 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
             for (auto* page : in_col.pages) {
                 switch (in_col.type) {
                 case DataType::INT32: {
-                    auto num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                    auto* data_begin = reinterpret_cast<int32_t*>(page->data + 4);
-                    auto* bitmap = reinterpret_cast<uint8_t*>(
-                        page->data + PAGE_SIZE - (num_rows + 7) / 8);
 
-                    uint16_t data_idx = 0;
-                    for (uint16_t i = 0; i < num_rows; ++i) {
-                        if (helper::get_bitmap(bitmap, i)) {
-                            auto value = data_begin[data_idx++];
-                            
-                            inserter.insert_value(
-                                value & 0xFFFF,              // table_idx (low bits)
-                                (value >> 16) & 0xFFFF,      // column_idx (high bits)
-                                helper::INT_VALUE            // mark as int
-                            );
-                        } else {
-                            inserter.insert_null(table_id, in_col_idx);
-                        }
-                        ++row_idx;
-                    }
-                    break;
-                }
-                case DataType::VARCHAR: {
-                    auto num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                    if (num_rows == 0xffff) {
-                        inserter.insert_value(table_id, in_col_idx, 0);
-                        ++row_idx;
-                    } else if (num_rows != 0xfffe) {
-                        auto* bitmap = reinterpret_cast<uint8_t*>(
-                            page->data + PAGE_SIZE - (num_rows + 7) / 8);
-                        uint16_t data_idx = 0;
-                        for (uint16_t i = 0; i < num_rows; ++i) {
-                            if (helper::get_bitmap(bitmap, i)) {
-                                inserter.insert_value(table_id, in_col_idx, data_idx++);
+                    for (auto* page : in_col.pages) {
+                        // Treat the page as an array of value_t
+                        auto* buf = reinterpret_cast<value_t*>(page->data);
+
+                        // How many entries fit in this page
+                        size_t entries_in_page = PAGE_SIZE / sizeof(value_t);
+
+                        for (size_t i = 0; i < entries_in_page && row_idx < table.num_rows; ++i) {
+                            value_t v = buf[i];
+
+                            if (v.data_idx == 0xFFFF) {
+                                // NULL entry
+                                inserter.insert_null(v.table_idx, v.column_idx);
                             } else {
-                                inserter.insert_null(table_id, in_col_idx);
+                                // Normal value
+                                inserter.insert_value(v.table_idx, v.column_idx, v.data_idx);
                             }
+
                             ++row_idx;
                         }
+
+                        ++page_idx;
                     }
+                }
+                case DataType::VARCHAR: {
+                    // Treat the page as an array of value_t
+                    auto* buf = reinterpret_cast<value_t*>(page->data);
+
+                    // How many entries fit in this page
+                    size_t entries_in_page = PAGE_SIZE / sizeof(value_t);
+
+                    for (size_t i = 0; i < entries_in_page && row_idx < table.num_rows; ++i) {
+                        value_t v = buf[i];
+
+                        if (v.data_idx == 0xFFFF) {
+                            // NULL entry
+                            inserter.insert_null(v.table_idx, v.column_idx);
+                        } else {
+                            // Normal VARCHAR entry
+                            inserter.insert_value(v.table_idx, v.column_idx, v.data_idx);
+                        }
+
+                        ++row_idx;
+                    }
+
+                    ++page_idx;
                     break;
                 }
+              
                 }
-                ++page_idx;
             }
+            
             inserter.finalize();
         }
     };
-
     filter_tp.run(task, output_attrs.size());
     return results;
 }
 
+// Helper function to convert MyColumn to Column
+Column convert_to_column(MyColumn&& mc) {
+    Column col(mc.type);              // use existing Column(DataType) ctor
+    col.pages = std::move(mc.pages);  // transfer ownership of pages
+    mc.pages.clear();                 // leave source in valid state
+    return col;
+}
 
+ColumnarTable convert_column_t_to_columnar (
+    std::vector<column_t>& results,
+    const Plan& plan,
+    const std::vector<DataType>& types)
+{
+    ColumnarTable myresult;
+    myresult.columns.reserve(results.size());
+    myresult.num_rows = results.empty() ? 0 : results[0].num_rows;
+
+    for (size_t i = 0; i < results.size(); ++i) {
+        if (!results[i].columns.empty()) {
+            // Move MyColumn into Column via helper
+            myresult.columns.push_back(
+                convert_to_column(std::move(results[i].columns[0])));
+        } else {
+            // Create an empty Column of the right type
+            myresult.columns.emplace_back(Column(types[i]));
+        }
+    }
+    return myresult;
+}

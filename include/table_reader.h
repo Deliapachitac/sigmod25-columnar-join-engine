@@ -45,44 +45,43 @@ struct MyColumn {
     }
 
     
-    // Column(const Column&) = delete;
-    // Column& operator=(const Column&) = delete;
+    MyColumn(const MyColumn&) = delete;
+    MyColumn& operator=(const MyColumn&) = delete;
 
-    // Column(Column&& other) noexcept
-    //     : type(other.type), pages(std::move(other.pages)) {
-    //     other.pages.clear();
-    // }
+    MyColumn(MyColumn&& other) noexcept
+        : type(other.type), pages(std::move(other.pages)) {
+        other.pages.clear();
+    }
 
-    // Column& operator=(Column&& other) noexcept {
-    //     if (this != &other) {
-    //         for (auto* p : pages) delete p;
-    //         type = other.type;
-    //         pages = std::move(other.pages);
-    //         other.pages.clear();
-    //     }
-    //     return *this;
-    // }
+    MyColumn& operator=(MyColumn&& other) noexcept {
+        if (this != &other) {
+            for (auto* p : pages) delete p;
+            type = other.type;
+            pages = std::move(other.pages);
+            other.pages.clear();
+        }
+        return *this;
+    }
 
 };     
 
 struct column_t {
     size_t num_rows;  // number of rows in the table 
-    std::vector<Column> columns;  
+    std::vector<MyColumn> columns;  
 };
 
 
 struct MyColumnInserter {
-    Column& column;           
+    MyColumn& mycolumn;           
     size_t last_page_idx = 0;       
     size_t offset = 0;   //current write offset inside page->data
 
-    MyColumnInserter(Column& col) : column(col) {}
-
+    MyColumnInserter(MyColumn& col) : mycolumn(col) {}
     Page* get_page() {
-        if (last_page_idx == column.pages.size()) {
-            column.new_page();
+        if (last_page_idx == mycolumn.pages.size()) {
+            mycolumn.new_page();
         }       
-        return column.pages[last_page_idx];
+        return mycolumn.pages[last_page_idx];
     }
 
 
@@ -134,7 +133,10 @@ struct MyColumnInserter {
 std::vector<column_t> scan_column_table(const ColumnarTable& table,
      const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id);
 
-
+ColumnarTable convert_column_t_to_columnar(
+    std::vector<column_t>& results,
+    const Plan& plan,
+    const std::vector<DataType>& types);
 
 
 
