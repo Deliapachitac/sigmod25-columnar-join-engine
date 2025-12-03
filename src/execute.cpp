@@ -26,7 +26,6 @@ namespace Contest {
 
 using ExecuteResult = std::vector<std::vector<value_t>>; 
 
-
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
 
 struct JoinAlgorithm {
