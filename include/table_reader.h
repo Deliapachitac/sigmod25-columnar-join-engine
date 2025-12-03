@@ -26,10 +26,11 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
 // Structs for the second part of the project (columnar storage)
 struct MyColumn {
     DataType  type;         
-    std::vector<Page*> pages;
+    std::vector<Page*> pages; // first 2 bytes the number of rows, next bytes the value_t entries
 
     Page* new_page() {
         auto ret = new Page;
+        *reinterpret_cast<uint16_t*>(ret->data) = 0; // initialise row count to 0
         pages.push_back(ret);
         return ret;
     }
@@ -73,61 +74,71 @@ struct column_t {
 
 struct MyColumnInserter {
     MyColumn& mycolumn;           
-    size_t last_page_idx = 0;       
-    size_t offset = 0;   //current write offset inside page->data
-
+    size_t last_page_idx = 0; 
+    
     MyColumnInserter(MyColumn& col) : mycolumn(col) {}
+    
     Page* get_page() {
         if (last_page_idx == mycolumn.pages.size()) {
-            mycolumn.new_page();
+            Page* p = mycolumn.new_page();
+            *reinterpret_cast<uint16_t*>(p->data) = 0;
         }       
         return mycolumn.pages[last_page_idx];
     }
 
 
     void insert_value(uint16_t table_idx, uint16_t col_idx, uint16_t data_idx) {
+        
+        // First we need to get the current page and the current number of rows
         Page* page = get_page();
+        uint16_t& num_rows = *reinterpret_cast<uint16_t*>(page->data);
 
-        //check if we have enough space in the current page
-        if ((offset + 1) * sizeof(value_t) > PAGE_SIZE) {
+        //check if we have enough space in the current page 
+        // If we don't have enough space we need to get a new page
+        size_t max_rows = (PAGE_SIZE - sizeof(uint16_t)) / sizeof(value_t);
+        if (num_rows >= max_rows) {
             ++last_page_idx;
-            offset = 0;
             page = get_page();
+            num_rows = *reinterpret_cast<uint16_t*>(page->data); 
         }
 
-        auto* buf = reinterpret_cast<value_t*>(page->data);
-        buf[offset] = value_t{
-            .table_idx  = table_idx,
+        // Each entry is of size value_t so we are adding indexes to the data 
+        auto* buf = reinterpret_cast<value_t*>(page->data+ sizeof(uint16_t));
+        buf[num_rows] = value_t{
+            .table_idx = table_idx,
             .column_idx = col_idx,
-            .page_idx   = static_cast<uint16_t>(last_page_idx),
-            .data_idx   = data_idx
+            .page_idx = static_cast<uint16_t>(last_page_idx),
+            .data_idx=  data_idx
         };
-        ++offset;
+
+        // increase the number of rows because we added a new entry
+        ++num_rows; 
     }
 
     void insert_null(uint16_t table_idx, uint16_t col_idx) {
-        Page* page = get_page();
-
-        //check if we have enough space in the current page
-        if ((offset + 1) * sizeof(value_t) > PAGE_SIZE) {
-            ++last_page_idx;
-            offset = 0;
-            page = get_page();
-        }
-
-        auto* buf = reinterpret_cast<value_t*>(page->data);
-        buf[offset] = value_t{
-            .table_idx  = table_idx,
-            .column_idx = col_idx,
-            .page_idx   = static_cast<uint16_t>(last_page_idx),
-            .data_idx   = 0xFFFF // this is  NULL
-        };
-        ++offset;
-    }
-
-    void finalize() {
         
-    }
+        Page* page= get_page();
+        uint16_t& num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                            
+        //check if we have enough space in the current page
+        //If we don't have enough space we need to get a new page
+        size_t max_rows = (PAGE_SIZE - sizeof(uint16_t)) / sizeof(value_t);
+        if (num_rows >= max_rows) {
+            ++last_page_idx;
+            page =  get_page();
+            num_rows  = *reinterpret_cast<uint16_t*>(page->data);
+        }            
+
+        auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+        buf[num_rows] = value_t{
+            .table_idx = table_idx,
+            .column_idx = col_idx,
+            .page_idx =static_cast<uint16_t>(last_page_idx),
+            .data_idx =  0xFFFF // this is  NULL
+        };
+        ++num_rows;                
+    }        
+
 };
 
 std::vector<column_t> scan_column_table(const ColumnarTable& table,

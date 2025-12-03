@@ -379,7 +379,7 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
     //initialising the structs for each output  attribute
     for (auto& [in_col_idx, dtype] : output_attrs) {
         column_t out;
-        out.num_rows = table.num_rows;
+        out.num_rows = 0;
         out.columns.emplace_back(MyColumn(dtype));
         results.push_back(std::move(out));
     }
@@ -393,66 +393,25 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
             auto& out_col = results[column_idx].columns[0];
             MyColumnInserter inserter(out_col);
 
-            uint16_t page_idx = 0;
-            size_t row_idx = 0;
+            size_t inserted_rows = 0;
 
             for (auto* page : in_col.pages) {
-                switch (in_col.type) {
-                case DataType::INT32: {
 
-                    for (auto* page : in_col.pages) {
-                        // Treat the page as an array of value_t
-                        auto* buf = reinterpret_cast<value_t*>(page->data);
-
-                        // How many entries fit in this page
-                        size_t entries_in_page = PAGE_SIZE / sizeof(value_t);
-
-                        for (size_t i = 0; i < entries_in_page && row_idx < table.num_rows; ++i) {
-                            value_t v = buf[i];
-
-                            if (v.data_idx == 0xFFFF) {
-                                // NULL entry
-                                inserter.insert_null(v.table_idx, v.column_idx);
-                            } else {
-                                // Normal value
-                                inserter.insert_value(v.table_idx, v.column_idx, v.data_idx);
-                            }
-
-                            ++row_idx;
-                        }
-
-                        ++page_idx;
+                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                auto*buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+                for (uint16_t i = 0; i < num_rows; ++i) {
+                    value_t entry = buf[i];
+                    if (entry.data_idx == helper::NULL_VALUE) {
+                        inserter.insert_null(static_cast<uint16_t>(table_id), static_cast<uint16_t>(in_col_idx));
+                    } else {
+                        inserter.insert_value(static_cast<uint16_t>(table_id), static_cast<uint16_t>(in_col_idx), entry.data_idx);
                     }
-                }
-                case DataType::VARCHAR: {
-                    // Treat the page as an array of value_t
-                    auto* buf = reinterpret_cast<value_t*>(page->data);
-
-                    // How many entries fit in this page
-                    size_t entries_in_page = PAGE_SIZE / sizeof(value_t);
-
-                    for (size_t i = 0; i < entries_in_page && row_idx < table.num_rows; ++i) {
-                        value_t v = buf[i];
-
-                        if (v.data_idx == 0xFFFF) {
-                            // NULL entry
-                            inserter.insert_null(v.table_idx, v.column_idx);
-                        } else {
-                            // Normal VARCHAR entry
-                            inserter.insert_value(v.table_idx, v.column_idx, v.data_idx);
-                        }
-
-                        ++row_idx;
-                    }
-
-                    ++page_idx;
-                    break;
-                }
+                    ++inserted_rows;      
+                }     
               
-                }
             }
+            results[column_idx].num_rows = inserted_rows;
             
-            inserter.finalize();
         }
     };
     filter_tp.run(task, output_attrs.size());
