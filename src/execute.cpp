@@ -67,38 +67,35 @@ struct JoinAlgorithm {
 
     void extract_keys_from_column(HashTable& hash_table, column_t& column, std::vector<std::pair<int32_t, size_t>>& build_keys){
         size_t row_idx = 0;
-        for (auto& mycolumn: column.columns) {
-            for(auto* page: mycolumn.pages) {
-
-                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-                
-                for (uint16_t i = 0; i < num_rows; i++)
-                {
-                    const value_t& record = buf[i];
-                    if(record.data_idx == 0xFFFF) {
-                        row_idx++;
-                        continue;
-                    }
-                
-                
-                    int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
-                                (int32_t(record.table_idx)  & 0xFFFF);
-                    build_keys.emplace_back(key, row_idx);
-                    
-                    if (key >= 0) {
-                        auto itr = hash_table.find(key);
-                        if (itr == hash_table.end()) {
-                            hash_table.emplace(key, std::vector<size_t>(1, row_idx));
-                        } else {
-                            itr->second.push_back(row_idx);
-                        }
-                        row_idx++;
-                    } else {
-                        throw std::runtime_error("wrong type of field");
-                    }
+        for(auto* page: column.pages) {
+            uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+            auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+            
+            for (uint16_t i = 0; i < num_rows; i++)
+            {
+                const value_t& record = buf[i];
+                if(record.data_idx == 0xFFFF) {
+                    row_idx++;
+                    continue;
                 }
-            } 
+            
+            
+                int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
+                            (int32_t(record.table_idx)  & 0xFFFF);
+                build_keys.emplace_back(key, row_idx);
+                
+                if (key >= 0) {
+                    auto itr = hash_table.find(key);
+                    if (itr == hash_table.end()) {
+                        hash_table.emplace(key, std::vector<size_t>(1, row_idx));
+                    } else {
+                        itr->second.push_back(row_idx);
+                    }
+                    row_idx++;
+                } else {
+                    throw std::runtime_error("wrong type of field");
+                }
+            }
         }
     }
 
@@ -108,81 +105,67 @@ struct JoinAlgorithm {
         // Initialize output column_t structures if not already done
         if (results.empty()) {
             for (auto [col_idx, dtype]: output_attrs) {
-                column_t out;
+                column_t out(dtype);
                 out.num_rows = 0;
-                out.type = dtype;
-                out.columns.emplace_back(MyColumn());
                 results.push_back(std::move(out));
             }
-        }
-        
-        // Create persistent inserters for all output columns
-        std::vector<MyColumnInserter> inserters;
-        for (auto& res_col : results) {
-            inserters.emplace_back(res_col.columns[0]);
         }
         
         // Determine which column to probe based on build side
         column_t& probe_col = is_left ? right[right_col] : left[left_col];
         
         size_t probe_row_idx = 0;
-        for (auto& mycolumn: probe_col.columns) {
-            for(auto* page: mycolumn.pages) {
-                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-                
-                for (uint16_t i = 0; i < num_rows; i++)
-                {
-                    const value_t& record = buf[i];
-                    if(record.data_idx == 0xFFFF) {
-                        probe_row_idx++;
-                        continue;
-                    }
-                
-                
-                    int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
-                                (int32_t(record.table_idx)  & 0xFFFF);
-                    if (key >= 0) {
-                        if (auto itr = hash_table.find(key); itr != hash_table.end()) {
-                            for (auto build_row_idx: itr->second) {
-                                // For each match, insert values into output columns
-                                for (size_t out_col_idx = 0; out_col_idx < output_attrs.size(); ++out_col_idx) {
-                                    size_t src_col_idx = std::get<0>(output_attrs[out_col_idx]);
-                                    value_t value_to_insert;
-                                    
-                                    // Determine which side to pull from
-                                    if (is_left) {
-                                        // Build is left, probe is right
-                                        if (src_col_idx < left.size()) {
-                                            value_to_insert = get_value_at_row(left[src_col_idx], build_row_idx);
-                                        } else {
-                                            value_to_insert = get_value_at_row(right[src_col_idx - left.size()], probe_row_idx);
-                                        }
+        for(auto* page: probe_col.pages) {
+            uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+            auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+            
+            for (uint16_t i = 0; i < num_rows; i++)
+            {
+                const value_t& record = buf[i];
+                if(record.data_idx == 0xFFFF) {
+                    probe_row_idx++;
+                    continue;
+                }
+            
+            
+                int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
+                            (int32_t(record.table_idx)  & 0xFFFF);
+                if (key >= 0) {
+                    if (auto itr = hash_table.find(key); itr != hash_table.end()) {
+                        for (auto build_row_idx: itr->second) {
+                            // For each match, insert values into output columns
+                            for (size_t out_col_idx = 0; out_col_idx < output_attrs.size(); ++out_col_idx) {
+                                size_t src_col_idx = std::get<0>(output_attrs[out_col_idx]);
+                                value_t value_to_insert;
+                                
+                                // Determine which side to pull from
+                                if (is_left) {
+                                    // Build is left, probe is right
+                                    if (src_col_idx < left.size()) {
+                                        value_to_insert = get_value_at_row(left[src_col_idx], build_row_idx);
                                     } else {
-                                        // Build is right, probe is left
-                                        if (src_col_idx < left.size()) {
-                                            value_to_insert = get_value_at_row(left[src_col_idx], probe_row_idx);
-                                        } else {
-                                            value_to_insert = get_value_at_row(right[src_col_idx - left.size()], build_row_idx);
-                                        }
+                                        value_to_insert = get_value_at_row(right[src_col_idx - left.size()], probe_row_idx);
                                     }
-                                    
-                                    // Insert using persistent inserter
-                                    inserters[out_col_idx].insert_value(
-                                        value_to_insert.table_idx,
-                                        value_to_insert.column_idx,
-                                        value_to_insert.page_idx,
-                                        value_to_insert.data_idx);
+                                } else {
+                                    // Build is right, probe is left
+                                    if (src_col_idx < left.size()) {
+                                        value_to_insert = get_value_at_row(left[src_col_idx], probe_row_idx);
+                                    } else {
+                                        value_to_insert = get_value_at_row(right[src_col_idx - left.size()], build_row_idx);
+                                    }
                                 }
                                 
-                                // Increment row count for first result column only (they're all the same)
-                                results[0].num_rows++;
+                                // Insert directly into result column's pages
+                                results[out_col_idx].insert_value_to_page(value_to_insert);
                             }
+                            
+                            // Increment row count for first result column only (they're all the same)
+                            results[0].num_rows++;
                         }
-                        probe_row_idx++;
-                    } else {
-                        throw std::runtime_error("wrong type of field");
                     }
+                    probe_row_idx++;
+                } else {
+                    throw std::runtime_error("wrong type of field");
                 }
             }
         }
@@ -195,16 +178,14 @@ struct JoinAlgorithm {
     
     value_t get_value_at_row(const column_t& col, size_t row_idx) {
         size_t current_row = 0;
-        for ( auto& mycolumn : col.columns) {
-            for ( auto* page : mycolumn.pages) {
-                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-                
-                if (current_row + num_rows > row_idx) {
-                    return buf[row_idx - current_row];
-                }
-                current_row += num_rows;
+        for ( auto* page : col.pages) {
+            uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+            auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+            
+            if (current_row + num_rows > row_idx) {
+                return buf[row_idx - current_row];
             }
+            current_row += num_rows;
         }
         throw std::runtime_error("row_idx out of bounds");
     }
