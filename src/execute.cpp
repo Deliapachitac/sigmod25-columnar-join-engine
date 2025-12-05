@@ -50,7 +50,7 @@ struct JoinAlgorithm {
             extract_keys_from_column(hash_table,left[left_col], build_keys );
 
             //probe phase
-            probe_phase(hash_table,left[left_col], left, right, build_keys,  true);
+            probe_phase(hash_table, left, right, build_keys,  true);
             
         } else {
             
@@ -58,7 +58,7 @@ struct JoinAlgorithm {
             extract_keys_from_column(hash_table,right[right_col], build_keys );
 
             //probe phase
-            probe_phase(hash_table,right[right_col], left, right, build_keys,  false);
+            probe_phase(hash_table, left, right, build_keys,  false);
             
         }
     }
@@ -103,7 +103,7 @@ struct JoinAlgorithm {
     }
 
 
-    void probe_phase(HashTable& hash_table, column_t& column,ExecuteResult& left, ExecuteResult& right, const std::vector<std::pair<int32_t, size_t>>& build_keys, bool is_left) {
+    void probe_phase(HashTable& hash_table, ExecuteResult& left, ExecuteResult& right, const std::vector<std::pair<int32_t, size_t>>& build_keys, bool is_left) {
         
         // Initialize output column_t structures if not already done
         if (results.empty()) {
@@ -122,8 +122,11 @@ struct JoinAlgorithm {
             inserters.emplace_back(res_col.columns[0]);
         }
         
+        // Determine which column to probe based on build side
+        column_t& probe_col = is_left ? right[right_col] : left[left_col];
+        
         size_t probe_row_idx = 0;
-        for (auto& mycolumn: column .columns) {
+        for (auto& mycolumn: probe_col.columns) {
             for(auto* page: mycolumn.pages) {
                 uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
                 auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));

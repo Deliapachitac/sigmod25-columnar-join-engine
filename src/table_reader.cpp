@@ -396,7 +396,7 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
             size_t row_idx = 0;
             uint16_t page_idx = 0;
             
-            for (auto* page : in_column.pages) {
+            for (auto* page : in_column.pages| views::transform([](auto* page) { return page->data; })) {
                 switch (dtype) {
                 case DataType::INT32: {
                     auto  num_rows   = *reinterpret_cast<uint16_t*>(page);
