@@ -85,13 +85,13 @@ struct JoinAlgorithm {
                     int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
                                 (int32_t(record.table_idx)  & 0xFFFF);
                     build_keys.emplace_back(key, row_idx);
-
                     
                     if (key >= 0) {
-                        if (hash_table.find(key) == hash_table.end()) {
+                        auto itr = hash_table.find(key);
+                        if (itr == hash_table.end()) {
                             hash_table.emplace(key, std::vector<size_t>(1, row_idx));
                         } else {
-                            hash_table[key].push_back(row_idx);
+                            itr->second.push_back(row_idx);
                         }
                         row_idx++;
                     } else {
@@ -142,7 +142,6 @@ struct JoinAlgorithm {
                 
                     int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |
                                 (int32_t(record.table_idx)  & 0xFFFF);
-
                     if (key >= 0) {
                         if (auto itr = hash_table.find(key); itr != hash_table.end()) {
                             for (auto build_row_idx: itr->second) {
@@ -172,6 +171,7 @@ struct JoinAlgorithm {
                                     inserters[out_col_idx].insert_value(
                                         value_to_insert.table_idx,
                                         value_to_insert.column_idx,
+                                        value_to_insert.page_idx,
                                         value_to_insert.data_idx);
                                 }
                                 

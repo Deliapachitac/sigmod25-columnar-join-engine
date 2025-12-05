@@ -68,7 +68,7 @@ struct MyColumn {
 struct column_t {
     size_t num_rows;  // number of rows in the table 
     DataType  type; 
-    std::vector<MyColumn> columns;  
+    std::vector<MyColumn> columns; 
 };
 
 
@@ -87,7 +87,7 @@ struct MyColumnInserter {
     }
 
 
-    void insert_value(uint16_t table_idx, uint16_t col_idx, uint16_t data_idx) {
+    void insert_value(uint16_t table_idx, uint16_t col_idx,uint16_t page_idx,uint16_t data_idx) {
         
         // First we need to get the current page and the current number of rows
         Page* page = get_page();
@@ -107,7 +107,7 @@ struct MyColumnInserter {
         buf[num_rows] = value_t{
             .table_idx = table_idx,
             .column_idx = col_idx,
-            .page_idx = static_cast<uint16_t>(last_page_idx),
+            .page_idx = page_idx,
             .data_idx=  data_idx
         };
 
@@ -115,7 +115,7 @@ struct MyColumnInserter {
         ++num_rows; 
     }
 
-    void insert_null(uint16_t table_idx, uint16_t col_idx) {
+    void insert_null(uint16_t table_idx, uint16_t col_idx, uint16_t page_idx) {
         
         Page* page= get_page();
         uint16_t& num_rows = *reinterpret_cast<uint16_t*>(page->data);
@@ -133,7 +133,7 @@ struct MyColumnInserter {
         buf[num_rows] = value_t{
             .table_idx = table_idx,
             .column_idx = col_idx,
-            .page_idx =static_cast<uint16_t>(last_page_idx),
+            .page_idx =page_idx,
             .data_idx =  0xFFFF // this is  NULL
         };
         ++num_rows;                

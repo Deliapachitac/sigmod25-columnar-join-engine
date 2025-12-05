@@ -409,10 +409,10 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                             auto value = data_begin[data_idx++];
                             uint16_t lower = value & 0xFFFF;
                             uint16_t upper = (value >> 16) & 0xFFFF;
-                            inserter.insert_value(lower, upper, 0xFFFE);
+                            inserter.insert_value(lower, upper, page_idx,0xFFFE);
                             ++row_idx;
                         } else {
-                            inserter.insert_null(0, 0);
+                            inserter.insert_null(0, 0,page_idx);
                             ++row_idx;
                         }
                     }
@@ -421,7 +421,7 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                 case DataType::VARCHAR: {
                     auto num_rows = *reinterpret_cast<uint16_t*>(page);
                     if (num_rows == 0xffff) {
-                        inserter.insert_value(table_id, in_col_idx, 0);
+                        inserter.insert_value(table_id, in_col_idx,page_idx, 0);
                         ++row_idx;
                     } else if (num_rows != 0xfffe) {
                         auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
@@ -429,11 +429,11 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                         
                         for (uint16_t i = 0; i < num_rows; ++i) {
                             if (helper::get_bitmap(bitmap, i)) {
-                                inserter.insert_value(table_id, in_col_idx, data_idx);
+                                inserter.insert_value(table_id, in_col_idx,page_idx, data_idx);
                                 ++data_idx;
                                 ++row_idx;
                             } else {
-                                inserter.insert_null(table_id, in_col_idx);
+                                inserter.insert_null(table_id, in_col_idx,page_idx);
                                 ++row_idx;
                             }
                         }
