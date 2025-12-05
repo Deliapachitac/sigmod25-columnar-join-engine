@@ -24,8 +24,8 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
 ///////////////////////////////////////////////////////////////
                                         
 // Structs for the second part of the project (columnar storage)
-struct MyColumn {
-    DataType  type;         
+struct MyColumn {    
+
     std::vector<Page*> pages; // first 2 bytes the number of rows, next bytes the value_t entries
 
     Page* new_page() {
@@ -36,7 +36,7 @@ struct MyColumn {
     }
 
     //constructor
-    MyColumn(DataType data_type): type(data_type), pages() {}
+    MyColumn(): pages() {}
 
     //destructor
     ~MyColumn() {
@@ -50,14 +50,13 @@ struct MyColumn {
     MyColumn& operator=(const MyColumn&) = delete;
 
     MyColumn(MyColumn&& other) noexcept
-        : type(other.type), pages(std::move(other.pages)) {
+        : pages(std::move(other.pages)) {
         other.pages.clear();
     }
 
     MyColumn& operator=(MyColumn&& other) noexcept {
         if (this != &other) {
             for (auto* p : pages) delete p;
-            type = other.type;
             pages = std::move(other.pages);
             other.pages.clear();
         }
@@ -68,6 +67,7 @@ struct MyColumn {
 
 struct column_t {
     size_t num_rows;  // number of rows in the table 
+    DataType  type; 
     std::vector<MyColumn> columns;  
 };
 
@@ -145,7 +145,7 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
      const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id);
 
 ColumnarTable convert_column_t_to_columnar(
-    std::vector<column_t>& results,
+    const std::vector<column_t>& results,
     const Plan& plan,
     const std::vector<DataType>& types);
 

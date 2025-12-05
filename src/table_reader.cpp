@@ -371,79 +371,167 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
 std::vector<column_t> scan_column_table(const ColumnarTable& table,
     const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id)
 {
-
     namespace views = ranges::views;
+    
+    // Initialize result columns with MyColumn objects
     std::vector<column_t> results;
-    results.reserve(output_attrs.size()); // reserve space for the collumns(size of output_attrs = number of columns)
-
-    //initialising the structs for each output  attribute
+    results.reserve(output_attrs.size());
+    
     for (auto& [in_col_idx, dtype] : output_attrs) {
         column_t out;
         out.num_rows = 0;
-        out.columns.emplace_back(MyColumn(dtype));
+        out.type = dtype;
+        out.columns.emplace_back(MyColumn());
         results.push_back(std::move(out));
     }
-
+    
     auto task = [&](size_t begin, size_t end) {
-
         for (size_t column_idx = begin; column_idx < end; ++column_idx) {
-
             size_t in_col_idx = std::get<0>(output_attrs[column_idx]);
-            auto& in_col = table.columns[in_col_idx];
+            DataType dtype = std::get<1>(output_attrs[column_idx]);
+            auto& in_column = table.columns[in_col_idx];
             auto& out_col = results[column_idx].columns[0];
             MyColumnInserter inserter(out_col);
-
-            size_t inserted_rows = 0;
-
-            for (auto* page : in_col.pages) {
-
-                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                auto*buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-                for (uint16_t i = 0; i < num_rows; ++i) {
-                    value_t entry = buf[i];
-                    if (entry.data_idx == helper::NULL_VALUE) {
-                        inserter.insert_null(static_cast<uint16_t>(table_id), static_cast<uint16_t>(in_col_idx));
-                    } else {
-                        inserter.insert_value(static_cast<uint16_t>(table_id), static_cast<uint16_t>(in_col_idx), entry.data_idx);
-                    }
-                    ++inserted_rows;      
-                }     
-              
-            }
-            results[column_idx].num_rows = inserted_rows;
             
+            size_t row_idx = 0;
+            uint16_t page_idx = 0;
+            
+            for (auto* page : in_column.pages) {
+                switch (dtype) {
+                case DataType::INT32: {
+                    auto  num_rows   = *reinterpret_cast<uint16_t*>(page);
+                    auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
+                    auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                    uint16_t data_idx = 0;
+                    
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        if (helper::get_bitmap(bitmap, i)) {
+                            auto value = data_begin[data_idx++];
+                            uint16_t lower = value & 0xFFFF;
+                            uint16_t upper = (value >> 16) & 0xFFFF;
+                            inserter.insert_value(lower, upper, 0xFFFE);
+                            ++row_idx;
+                        } else {
+                            inserter.insert_null(0, 0);
+                            ++row_idx;
+                        }
+                    }
+                    break;
+                }
+                case DataType::VARCHAR: {
+                    auto num_rows = *reinterpret_cast<uint16_t*>(page);
+                    if (num_rows == 0xffff) {
+                        inserter.insert_value(table_id, in_col_idx, 0);
+                        ++row_idx;
+                    } else if (num_rows != 0xfffe) {
+                        auto* bitmap = reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                        uint16_t data_idx = 0;
+                        
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (helper::get_bitmap(bitmap, i)) {
+                                inserter.insert_value(table_id, in_col_idx, data_idx);
+                                ++data_idx;
+                                ++row_idx;
+                            } else {
+                                inserter.insert_null(table_id, in_col_idx);
+                                ++row_idx;
+                            }
+                        }
+                    }
+                    break;
+                }
+                }
+                page_idx++;
+            }
+            results[column_idx].num_rows = row_idx;
         }
+
     };
     filter_tp.run(task, output_attrs.size());
     return results;
 }
 
-// Helper function to convert MyColumn to Column
-Column convert_to_column(MyColumn&& mc) {
-    Column col(mc.type);              // use existing Column(DataType) ctor
-    col.pages = std::move(mc.pages);  // transfer ownership of pages
-    mc.pages.clear();                 // leave source in valid state
-    return col;
-}
+
+
 
 ColumnarTable convert_column_t_to_columnar (
-    std::vector<column_t>& results,
+    const std::vector<column_t>& results,
     const Plan& plan,
     const std::vector<DataType>& types)
 {
-    ColumnarTable myresult;
-    myresult.columns.reserve(results.size());
-    myresult.num_rows = results.empty() ? 0 : results[0].num_rows;
-
-    for (size_t i = 0; i < results.size(); ++i) {
-        if (!results[i].columns.empty()) {
-            // Move MyColumn into Column via helper
-            myresult.columns.push_back(
-                convert_to_column(std::move(results[i].columns[0])));
-        } else {
-            // Create an empty Column of the right type
-            myresult.columns.emplace_back(Column(types[i]));
+    namespace views  = ranges::views;
+    ColumnarTable ret;
+    
+    // Calculate total rows from first column if available
+    ret.num_rows = results.empty() ? 0 : results[0].num_rows;
+    
+    for (auto [col_idx, data_type]: types | views::enumerate) {
+        ret.columns.emplace_back(data_type);
+        auto& out_column = ret.columns.back();
+        const auto& in_col = results[col_idx];
+        
+        switch (data_type) {
+        case DataType::INT32: {
+            ColumnInserter<int32_t> inserter(out_column);
+            
+            // Iterate through all MyColumn objects in this column_t
+            for (const auto& mycolumn : in_col.columns) {
+                // Iterate through all pages in this MyColumn
+                for (auto* page : mycolumn.pages) {
+                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                    auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+                    
+                    // Process each value_t entry in the page
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        const value_t& value = buf[i];
+                        
+                        if (value.data_idx == helper::NULL_VALUE) {
+                            inserter.insert_null();
+                        } else if (value.data_idx == helper::INT_VALUE) {
+                            // Combine column_idx and table_idx back into int32
+                            int32_t combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |
+                                                     (int32_t(value.table_idx) & 0xFFFF);
+                            inserter.insert(combined_value);
+                        } else {
+                            throw std::runtime_error("Invalid data_idx for INT32 column");
+                        }
+                    }
+                }
+            }
+            inserter.finalize();
+            break;
+        }
+        case DataType::VARCHAR: {
+            ColumnInserter<std::string> inserter(out_column);
+            
+            // Iterate through all MyColumn objects in this column_t
+            for (const auto& mycolumn : in_col.columns) {
+                // Iterate through all pages in this MyColumn
+                for (auto* page : mycolumn.pages) {
+                    uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                    auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+                    
+                    // Process each value_t entry in the page
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        const value_t& string_meta = buf[i];
+                        
+                        if (string_meta.data_idx == helper::NULL_VALUE) {
+                            inserter.insert_null();
+                        } else if (string_meta.data_idx != helper::INT_VALUE) {
+                            // Materialize the string from the original source
+                            std::string value;
+                            materialize_string(string_meta, plan, value);
+                            inserter.insert(value);
+                        } else {
+                            throw std::runtime_error("Invalid data_idx for VARCHAR column");
+                        }
+                    }
+                }
+            }
+            inserter.finalize();
+            break;
+        }
         }
     }
-    return myresult;
+    return ret;
 }
