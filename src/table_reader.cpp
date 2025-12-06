@@ -479,9 +479,6 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
 }
 
 
-
-
-
 ColumnarTable convert_column_t_to_columnar (
     const std::vector<column_t>& results,
     const Plan& plan,

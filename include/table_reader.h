@@ -24,7 +24,6 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
 ///////////////////////////////////////////////////////////////
                                         
 // Structs for the second part of the project (columnar storage)  
-
 struct column_t {
     size_t num_rows;  // number of rows in the table 
     DataType  type; 
