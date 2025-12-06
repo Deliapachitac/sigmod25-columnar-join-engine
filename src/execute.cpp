@@ -25,66 +25,72 @@ struct JoinAlgorithm {
 
     auto run() {
         namespace views = ranges::views;
-        
-        size_t sz = build_left ? left.size() : right.size();
-        using HashTable = std::unordered_map<int32_t, std::vector<size_t>>;
-        HashTable hash_table(sz);
 
-        auto &build_side = build_left ? left: right;
-        auto &build_col = build_left ? left_col: right_col;
-        auto &probe_side = build_left ? right : left;
-        auto &probe_col = build_left ? right_col : left_col;
+        /* -------- SELECT BUILD / PROBE SIDES -------- */
+        auto &build_side  = build_left ? left  : right;
+        auto &probe_side  = build_left ? right : left;
+        auto  build_col   = build_left ? left_col  : right_col;
+        auto  probe_col   = build_left ? right_col : left_col;
 
-        /* Place the items inside the hash table */
-        for (auto&& [idx, record]: build_side | views::enumerate) {
-            if(record[build_col].data_idx == 0xFFFF) continue;
-            auto key = ((int32_t(record[build_col].column_idx) & 0xFFFF) << 16) |
-                            (int32_t(record[build_col].table_idx)  & 0xFFFF);
-            if (key >= 0) {
-                if (auto itr = hash_table.find(key); itr == hash_table.end()) {
-                    hash_table.emplace(key, std::vector<size_t>(1, idx));
-                } else {
-                    itr->second.push_back(idx);
-                }
-            } else {
-                throw std::runtime_error("wrong type of field");
-            }
-                
+        /* ---------- BUILD UNCHAINED HASH TABLE ---------- */
+        unchained_ht ht(build_side.size());
+
+        for (auto&& [idx, record] : build_side | views::enumerate) {
+
+            if (record[build_col].data_idx == 0xFFFF)
+                continue;
+
+            int32_t key =
+                ((int32_t(record[build_col].column_idx) & 0xFFFF) << 16) |
+                 (int32_t(record[build_col].table_idx ) & 0xFFFF);
+
+            // Store build index as payload
+            ht.build_insert(key, idx);
         }
 
-        /* Probe the hash table */
-        for (auto& probe_record: probe_side) {
-            if(probe_record[probe_col].data_idx == 0xFFFF) continue;
-            auto key = ((int32_t(probe_record[probe_col].column_idx) & 0xFFFF) << 16) |
-                            (int32_t(probe_record[probe_col].table_idx)  & 0xFFFF);
+        ht.finalize_build();
 
-            if (key >= 0) {
-                if (auto itr = hash_table.find(key); itr != hash_table.end()) {
-                    for (auto build_idx: itr->second) {
-                        auto&             build_record = build_side[build_idx];
-                        std::vector<value_t> new_record;
-                        new_record.reserve(output_attrs.size());
+        /* ------------------- PROBE ------------------- */
+        for (auto &probe_record : probe_side) {
 
-                        auto &left_record = build_left ? build_record : probe_record;
-                        auto &right_record = build_left ? probe_record : build_record;
+            if (probe_record[probe_col].data_idx == 0xFFFF)
+                continue;
 
-                        for (auto [col_idx, _]: output_attrs) {
-                            if (col_idx < left_record.size()) {
-                                new_record.emplace_back(left_record[col_idx]);
-                            } else {
-                                new_record.emplace_back(
-                                    right_record[col_idx - left_record.size()]);
-                            }
-                        }
-                        results.emplace_back(std::move(new_record));
-                    }
+            int32_t key =
+                ((int32_t(probe_record[probe_col].column_idx) & 0xFFFF) << 16) |
+                 (int32_t(probe_record[probe_col].table_idx ) & 0xFFFF);
+
+            auto [begin, end] = ht.lookup(key);
+
+            if (!begin)          // Bloom filter or no match
+                continue;
+
+            /* Iterate all matches (indices from build side) */
+            for (auto p = begin; p != end; ++p) {
+
+                size_t build_idx = p->value;
+                auto &build_record = build_side[build_idx];
+
+                std::vector<value_t> new_record;
+                new_record.reserve(output_attrs.size());
+
+                auto &left_record  = build_left ? build_record : probe_record;
+                auto &right_record = build_left ? probe_record  : build_record;
+
+                for (auto [col_idx, _] : output_attrs) {
+                    if (col_idx < left_record.size())
+                        new_record.emplace_back(left_record[col_idx]);
+                    else
+                        new_record.emplace_back(
+                            right_record[col_idx - left_record.size()]);
                 }
-            } else {
-                throw std::runtime_error("wrong type of field");
-            }      
+
+                results.emplace_back(std::move(new_record));
+            }
         }
     }
 };
+
 
 ExecuteResult execute_hash_join(const Plan&          plan,
     const JoinNode&                                  join,
