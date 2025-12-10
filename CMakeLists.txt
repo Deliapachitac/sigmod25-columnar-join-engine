@@ -93,6 +93,7 @@ add_executable(build_database tests/build_database.cpp)
 add_executable(hopscotch_tests ${SIGMODPC_SRC} tests/hopscotch_tests.cpp)
 add_executable(rh_unit_tests ${SIGMODPC_SRC} tests/robin_hood_tests.cpp)
 add_executable(cuckoo_unit_tests ${SIGMODPC_SRC} tests/cuckoo_test.cpp)
+add_executable(Integration_tests ${SIGMODPC_SRC} tests/Integration_tests.cpp)
 
 # For all executables
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -102,6 +103,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_compile_definitions(hopscotch_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_definitions(rh_unit_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_definitions(cuckoo_unit_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(Integration_tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -122,12 +124,14 @@ target_link_libraries(unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain
 target_link_libraries(hopscotch_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain)
 target_link_libraries(rh_unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain)
 target_link_libraries(cuckoo_unit_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain)
+target_link_libraries(Integration_tests PRIVATE re2 range-v3 fmt Catch2::Catch2WithMain)
 
 target_include_directories(run PRIVATE include)
 target_include_directories(build_database PRIVATE include)
 target_include_directories(unit_tests PRIVATE include)
 target_include_directories(hopscotch_tests PRIVATE include)
 target_include_directories(rh_unit_tests PRIVATE include)
+target_include_directories(Integration_tests PRIVATE include)
 target_include_directories(cuckoo_unit_tests PRIVATE include)
 
 add_custom_target(all_tests
@@ -136,6 +140,7 @@ add_custom_target(all_tests
         hopscotch_tests
         rh_unit_tests
         cuckoo_unit_tests
+        Integration_tests
 )
 
 
