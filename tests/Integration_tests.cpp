@@ -72,10 +72,10 @@ std::vector<std::vector<Data>> generate_random_rows_with_long_string(
     // Random Number Generator Setup
     std::random_device rd;
     std::mt19937 gen(rd());
-    std::uniform_int_distribution<int32_t> int_dist(0, 100);       // Random Ints 0-100
-    std::uniform_int_distribution<int> char_dist('a', 'z');        // Random Chars a-z
-    std::uniform_int_distribution<int> len_dist(8192, 16000);       
-    std::bernoulli_distribution null_dist(0.1);                    // 10% chance of NULL
+    std::uniform_int_distribution<int32_t> int_dist(0, 100); // Random Ints 0-100
+    std::uniform_int_distribution<int> char_dist('a', 'z');  // Random Chars a-z
+    std::uniform_int_distribution<int> len_dist(8192, 16000);
+    std::bernoulli_distribution null_dist(0.1); // 10% chance of NULL
 
     for (size_t i = 0; i < num_rows; ++i)
     {
@@ -92,26 +92,26 @@ std::vector<std::vector<Data>> generate_random_rows_with_long_string(
 
             switch (type)
             {
-                case DataType::INT32:
-                {
-                    row.push_back(int_dist(gen));
-                    break;
-                }
-                case DataType::VARCHAR:
-                {
-                    int len = len_dist(gen);
-                    std::string s;
-                    s.reserve(len);
+            case DataType::INT32:
+            {
+                row.push_back(int_dist(gen));
+                break;
+            }
+            case DataType::VARCHAR:
+            {
+                int len = len_dist(gen);
+                std::string s;
+                s.reserve(len);
 
-                    for (int c = 0; c < len; ++c)
-                        s.push_back(static_cast<char>(char_dist(gen)));
+                for (int c = 0; c < len; ++c)
+                    s.push_back(static_cast<char>(char_dist(gen)));
 
-                    row.push_back(std::move(s));
-                    break;
-                }
-                default:
-                    row.push_back(std::monostate{});
-                    break;
+                row.push_back(std::move(s));
+                break;
+            }
+            default:
+                row.push_back(std::monostate{});
+                break;
             }
         }
         rows.push_back(std::move(row));
@@ -266,72 +266,50 @@ TEST_CASE("Bushy Join", "[bushy_join]")
 {
     Plan plan;
 
-    // Scan nodes with richer schemas
-    plan.new_scan_node(0, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // region (Changed from 2)
-                              {2, DataType::VARCHAR}  // country (Changed from 3)
-                          });
+    plan.new_scan_node(0, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::VARCHAR}});
 
-    // Scan Node 1 (Table 2 has 3 cols: 0, 1, 2)
-    plan.new_scan_node(1, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // category (Changed from 3)
-                              {2, DataType::VARCHAR}  // subcategory (Changed from 4)
-                          });
+    plan.new_scan_node(1, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::VARCHAR}});
 
     // Scan Node 2 (Table 3 has 3 cols: 0, 1, 2)
-    plan.new_scan_node(2, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // supplier (Changed from 2)
-                              {2, DataType::INT32}    // rating (Changed from 1, or keep 1/2 depending on schema order)
-                          });
-    // Note: types3 is {INT, VARCHAR, INT}, so index 1 is VARCHAR, index 2 is INT.
+    plan.new_scan_node(2, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::INT32}});
 
-    // Scan Node 3 (Table 4 has 3 cols: 0, 1, 2)
-    plan.new_scan_node(3, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // status (Changed from 3)
-                              {2, DataType::INT32}    // priority (Changed from 1)
-                          });
+    plan.new_scan_node(3, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::INT32}});
 
-    // JOIN 0–1 → columns: id, region, country, category, subcategory
     plan.new_join_node(true, 0, 1, 0, 0,
-                       {
-                           {0, DataType::INT32},   // id
-                           {1, DataType::VARCHAR}, // region
-                           {2, DataType::VARCHAR}, // country
-                           {4, DataType::VARCHAR}, // category
-                           {5, DataType::VARCHAR}  // subcategory
-                       });
+                       {{0, DataType::INT32},
+                        {1, DataType::VARCHAR},
+                        {2, DataType::VARCHAR},
+                        {4, DataType::VARCHAR},
+                        {5, DataType::VARCHAR}});
 
-    // JOIN 2–3 → columns: id, supplier, rating, status, priority
     plan.new_join_node(true, 2, 3, 0, 0,
-                       {
-                           {0, DataType::INT32},   // id
-                           {1, DataType::VARCHAR}, // supplier
-                           {2, DataType::INT32},   // rating
-                           {4, DataType::VARCHAR}, // status
-                           {5, DataType::INT32}    // priority
-                       });
+                       {{0, DataType::INT32},
+                        {1, DataType::VARCHAR},
+                        {2, DataType::INT32},
+                        {4, DataType::VARCHAR},
+                        {5, DataType::INT32}});
 
-    // Final join (4–5)
-    // Output columns: all from left then all from right
     plan.new_join_node(true, 4, 5, 0, 0,
                        {
-                           // From left (0–1 join)
-                           {0, DataType::INT32},   // id
-                           {1, DataType::VARCHAR}, // region
-                           {2, DataType::VARCHAR}, // country
-                           {3, DataType::VARCHAR}, // category
-                           {4, DataType::VARCHAR}, // subcategory
 
-                           // From right (2–3 join)
-                           {6, DataType::VARCHAR}, // supplier
-                           {7, DataType::INT32},   // rating
-                           {8, DataType::VARCHAR}, // status
-                           {9, DataType::INT32}    // priority
-                       });
+                           {0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::VARCHAR},
+                           {3, DataType::VARCHAR},
+                           {4, DataType::VARCHAR},
+
+                           {6, DataType::VARCHAR},
+                           {7, DataType::INT32},
+                           {8, DataType::VARCHAR},
+                           {9, DataType::INT32}});
 
     // Table type definitions
     std::vector<DataType> types1 = {DataType::INT32, DataType::VARCHAR, DataType::VARCHAR};
@@ -372,75 +350,48 @@ TEST_CASE("Bushy Join with Long string", "[bushy_join_lstring]")
 {
     Plan plan;
 
-    // Scan nodes with richer schemas
-    // Scan nodes with richer schemas
-    plan.new_scan_node(0, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // region (Changed from 2)
-                              {2, DataType::VARCHAR}  // country (Changed from 3)
-                          });
+    plan.new_scan_node(0, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::VARCHAR}});
 
-    // Scan Node 1 (Table 2 has 3 cols: 0, 1, 2)
-    plan.new_scan_node(1, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // category (Changed from 3)
-                              {2, DataType::VARCHAR}  // subcategory (Changed from 4)
-                          });
+    plan.new_scan_node(1, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::VARCHAR}});
 
-    // Scan Node 2 (Table 3 has 3 cols: 0, 1, 2)
-    plan.new_scan_node(2, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // supplier (Changed from 2)
-                              {2, DataType::INT32}    // rating (Changed from 1, or keep 1/2 depending on schema order)
-                          });
-    // Note: types3 is {INT, VARCHAR, INT}, so index 1 is VARCHAR, index 2 is INT.
+    plan.new_scan_node(2, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::INT32}});
 
-    // Scan Node 3 (Table 4 has 3 cols: 0, 1, 2)
-    plan.new_scan_node(3, {
-                              {0, DataType::INT32},   // id
-                              {1, DataType::VARCHAR}, // status (Changed from 3)
-                              {2, DataType::INT32}    // priority (Changed from 1)
-                          });
+    plan.new_scan_node(3, {{0, DataType::INT32},
+                           {1, DataType::VARCHAR},
+                           {2, DataType::INT32}});
 
-    // JOIN 0–1 → columns: id, region, country, category, subcategory
     plan.new_join_node(true, 0, 1, 0, 0,
-                       {
-                           {0, DataType::INT32},   // id
-                           {1, DataType::VARCHAR}, // region
-                           {2, DataType::VARCHAR}, // country
-                           {4, DataType::VARCHAR}, // category
-                           {5, DataType::VARCHAR}  // subcategory
-                       });
+                       {{0, DataType::INT32},
+                        {1, DataType::VARCHAR},
+                        {2, DataType::VARCHAR},
+                        {4, DataType::VARCHAR},
+                        {5, DataType::VARCHAR}});
 
-    // JOIN 2–3 → columns: id, supplier, rating, status, priority
     plan.new_join_node(true, 2, 3, 0, 0,
-                       {
-                           {0, DataType::INT32},   // id
-                           {1, DataType::VARCHAR}, // supplier
-                           {2, DataType::INT32},   // rating
-                           {4, DataType::VARCHAR}, // status
-                           {5, DataType::INT32}    // priority
-                       });
+                       {{0, DataType::INT32},
+                        {1, DataType::VARCHAR},
+                        {2, DataType::INT32},
+                        {4, DataType::VARCHAR},
+                        {5, DataType::INT32}});
 
-    // Final join (4–5)
-    // Output columns: all from left then all from right
     plan.new_join_node(true, 4, 5, 0, 0,
-                       {
-                           // From left (0–1 join)
-                           {0, DataType::INT32},   // id
-                           {1, DataType::VARCHAR}, // region
-                           {2, DataType::VARCHAR}, // country
-                           {3, DataType::VARCHAR}, // category
-                           {4, DataType::VARCHAR}, // subcategory
+                       {{0, DataType::INT32},
+                        {1, DataType::VARCHAR},
+                        {2, DataType::VARCHAR},
+                        {3, DataType::VARCHAR},
+                        {4, DataType::VARCHAR},
 
-                           // From right (2–3 join)
-                           {6, DataType::VARCHAR}, // supplier
-                           {7, DataType::INT32},   // rating
-                           {8, DataType::VARCHAR}, // status
-                           {9, DataType::INT32}    // priority
-                       });
+                        {6, DataType::VARCHAR},
+                        {7, DataType::INT32},
+                        {8, DataType::VARCHAR},
+                        {9, DataType::INT32}});
 
-    // Table type definitions
     std::vector<DataType> types1 = {DataType::INT32, DataType::VARCHAR, DataType::VARCHAR};
     std::vector<DataType> types2 = {DataType::INT32, DataType::VARCHAR, DataType::VARCHAR};
     std::vector<DataType> types3 = {DataType::INT32, DataType::VARCHAR, DataType::INT32};
@@ -473,4 +424,116 @@ TEST_CASE("Bushy Join with Long string", "[bushy_join_lstring]")
     Reference::destroy_context(ref_ctx);
 
     assert_tables_equal(result, ref_result);
+}
+
+TEST_CASE("Join on NULL Keys", "[null_join]")
+{
+    Plan plan;
+    std::vector<DataType> schema = {DataType::INT32, DataType::VARCHAR};
+
+    std::vector<std::vector<Data>> rows1;
+    rows1.push_back({std::monostate{}, "A"});
+    rows1.push_back({1, "B"});
+
+    std::vector<std::vector<Data>> rows2;
+    rows2.push_back({std::monostate{}, "C"});
+    rows2.push_back({1, "D"});
+
+    Table table1(std::move(rows1), schema);
+    Table table2(std::move(rows2), schema);
+
+    plan.new_scan_node(0, {{0, DataType::INT32}, {1, DataType::VARCHAR}});
+    plan.new_scan_node(1, {{0, DataType::INT32}, {1, DataType::VARCHAR}});
+
+    plan.new_join_node(true, 0, 1, 0, 0,
+                       {{0, DataType::INT32}, {1, DataType::VARCHAR}, {3, DataType::VARCHAR}});
+
+    plan.inputs.emplace_back(table1.to_columnar());
+    plan.inputs.emplace_back(table2.to_columnar());
+    plan.root = 2;
+
+    auto *context = Contest::build_context();
+    auto result = Contest::execute(plan, context);
+    Contest::destroy_context(context);
+
+    auto *ref_ctx = Reference::build_context();
+    auto ref_result = Reference::execute(plan, ref_ctx);
+    Reference::destroy_context(ref_ctx);
+
+    assert_tables_equal(result, ref_result);
+
+    REQUIRE(result.num_rows == 1);
+}
+
+TEST_CASE("Many-to-Many Join Explosion", "[join_explosion]")
+{
+    Plan plan;
+
+    std::vector<DataType> schema = {DataType::INT32, DataType::VARCHAR};
+
+    std::vector<std::vector<Data>> rows1;
+    for (int i = 0; i < 50; ++i)
+        rows1.push_back({1, "Left"});
+
+    std::vector<std::vector<Data>> rows2;
+    for (int i = 0; i < 50; ++i)
+        rows2.push_back({1, "Right"});
+
+    Table table1(std::move(rows1), schema);
+    Table table2(std::move(rows2), schema);
+
+    plan.new_scan_node(0, {{0, DataType::INT32}, {1, DataType::VARCHAR}});
+    plan.new_scan_node(1, {{0, DataType::INT32}, {1, DataType::VARCHAR}});
+
+    plan.new_join_node(true, 0, 1, 0, 0,
+                       {{0, DataType::INT32}, {1, DataType::VARCHAR}, {3, DataType::VARCHAR}});
+
+    plan.inputs.emplace_back(table1.to_columnar());
+    plan.inputs.emplace_back(table2.to_columnar());
+    plan.root = 2;
+
+    auto *context = Contest::build_context();
+    auto result = Contest::execute(plan, context);
+    Contest::destroy_context(context);
+
+    auto *ref_ctx = Reference::build_context();
+    auto ref_result = Reference::execute(plan, ref_ctx);
+    Reference::destroy_context(ref_ctx);
+
+    INFO("Should produce Cartesian product of matching keys");
+    assert_tables_equal(result, ref_result);
+    REQUIRE(result.num_rows == 2500);
+}
+
+TEST_CASE("Join with Empty Tables", "[empty_join]")
+{
+    Plan plan;
+    std::vector<DataType> schema = {DataType::INT32, DataType::VARCHAR};
+
+    auto data1 = generate_random_rows(0, schema);
+    auto data2 = generate_random_rows(100, schema);
+
+    Table table1(std::move(data1), schema);
+    Table table2(std::move(data2), schema);
+
+    plan.new_scan_node(0, {{0, DataType::INT32}, {1, DataType::VARCHAR}});
+    plan.new_scan_node(1, {{0, DataType::INT32}, {1, DataType::VARCHAR}});
+
+    plan.new_join_node(true, 0, 1, 0, 0,
+                       {{0, DataType::INT32}, {1, DataType::VARCHAR}, {3, DataType::VARCHAR}});
+
+    plan.inputs.emplace_back(table1.to_columnar());
+    plan.inputs.emplace_back(table2.to_columnar());
+    plan.root = 2;
+
+    auto *context = Contest::build_context();
+    auto result = Contest::execute(plan, context);
+    Contest::destroy_context(context);
+
+    auto *ref_ctx = Reference::build_context();
+    auto ref_result = Reference::execute(plan, ref_ctx);
+    Reference::destroy_context(ref_ctx);
+
+    assert_tables_equal(result, ref_result);
+    REQUIRE(result.num_rows == 0);
 }
