@@ -15,5 +15,6 @@ jobs:
       - run: ./build/hopscotch_tests
       - run: ./build/rh_unit_tests
       - run: ./build/cuckoo_unit_tests
+      - run: ./build/Integration_tests
       
       - run: echo "🍏 This job's status is ${{ job.status }}."
