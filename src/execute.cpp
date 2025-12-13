@@ -8,20 +8,9 @@
 #include <hopscotch.h>
 #include <cstdlib>
 #include <algorithm>
-// SET TO 1 TO USE THIS HASHMAP, IF MULTIPLE ARE ACTIVE THE FIRST IN ORDER WILL BE USED, NONE ACTIVE AND UNORDERED_MAP WILL BE USED INSTEAD AS DEFAULT
-#define USE_RH 0
-#define USE_CUCKOO 0
-#define USE_HOPSCOTCH 0
+#include <unchained_hashtable.h>
 
-#if USE_RH
-using HashTable = rh_map<int32_t, std::vector<size_t>>;
-#elif USE_CUCKOO
-using HashTable = cuckoo_map<int32_t, std::vector<size_t>>;
-#elif USE_HOPSCOTCH
-using HashTable = HopscotchMap<int32_t, std::vector<size_t>>;
-#else
-using HashTable = std::unordered_map<int32_t, std::vector<size_t>>;
-#endif
+using HashTable = unchained_ht;
 
 namespace Contest {
 
@@ -39,14 +28,15 @@ struct JoinAlgorithm {
 
     auto run() {
         namespace views = ranges::views;
-        
-        size_t sz = build_left ? left.size() : right.size();
-        HashTable hash_table(sz);
+
+        HashTable hash_table;
         
         
         if (build_left) { 
             //Extract keys from left table and add to hash table
             extract_keys_from_column(hash_table,left[left_col]);
+
+            hash_table.finalize_build();
 
             //in the probe phase we use the hash table to find matches from the right table
             probe_phase(hash_table, left, right, true);
@@ -55,6 +45,8 @@ struct JoinAlgorithm {
             
             //Extract keys from right table and add to hash table      
             extract_keys_from_column(hash_table,right[right_col]);
+
+            hash_table.finalize_build();
 
             //in the probe phase we use the hash table to find matches from the left table
             probe_phase(hash_table, left, right, false);
@@ -87,12 +79,7 @@ struct JoinAlgorithm {
                 //If key already exists  we insert the row index in the vector of the row indexes
                 //else we create a new entry 
                 if (key >= 0) {
-                    auto itr = hash_table.find(key);
-                    if (itr == hash_table.end()) {
-                        hash_table.emplace(key, std::vector<size_t>(1, row_idx));
-                    } else {
-                        itr->second.push_back(row_idx);
-                    }
+                    hash_table.build_insert(key, row_idx);
                     row_idx++;
                 } else {
                     throw std::runtime_error("wrong type of field");
@@ -184,12 +171,12 @@ struct JoinAlgorithm {
                 
                 int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |  (int32_t(record.table_idx)  & 0xFFFF);
                 
-                //After getting the key we check if it exists in the hash table or not          
-                auto itr = hash_table.find(key);
+                //After getting the key we check if it exists in the hash table or not, and get the vector of matching row indexes   
+                auto matches = hash_table.probe(key);
 
                 //The key here exists so we need to iterate through all matching rows from the build side (the table we extracter with the previous function)
-                if (itr != hash_table.end()) {
-                    for (auto build_row_idx: itr->second) {
+                if (!matches.empty()) {
+                    for (auto build_row_idx: matches) {
 
                         //For each column of the table (left and right) we need to get the value_t entry and insert it into the output column_t
                         for (size_t out_col_idx = 0; out_col_idx < output_attrs.size(); ++out_col_idx) {

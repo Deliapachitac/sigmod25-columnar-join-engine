@@ -145,13 +145,13 @@ void unchained_ht::finalize_build()
 }
 
 
-std::vector<const unchained_ht::Tuple*>
+std::vector<size_t>
 unchained_ht::probe(int32_t key) const
 {
     if (!isBuilt)
         throw std::runtime_error("Hash table not built.");
 
-    std::vector<const Tuple*> result;
+    std::vector<size_t> result;
 
     if (tuple_count == 0)
         return result;
@@ -179,7 +179,7 @@ unchained_ht::probe(int32_t key) const
     for (auto p = begin; p < end; ++p)
         if (p->key == key)
         {
-            result.push_back(p);
+            result.push_back(p->value);
         }
             
 

@@ -82,7 +82,7 @@ public:
     void finalize_build();
 
     /* Probe: return range [start, end) of matching tuples */
-    std::vector<const Tuple*> probe(int32_t key) const;
+    std::vector<size_t> probe(int32_t key) const;
 
     /* Test functions for the hashtable */
     size_t get_directory_size() const { return directory_size; }
