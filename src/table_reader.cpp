@@ -2,6 +2,7 @@
 #include <table.h>
 #include <iostream>
 #include <inner_column.h>
+
 namespace helper{
     constexpr uint16_t NULL_VALUE = 0xFFFF;
     constexpr uint16_t INT_VALUE     = 0xFFFE;
@@ -225,6 +226,8 @@ void materialize_string(const value_t string_meta, const Plan& plan, std::string
         value = std::string{string_begin, data_begin + offset};
     }
 }
+
+
 ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>& table, 
                                         const Plan& plan, 
                                         const std::vector<DataType>& data_types
@@ -352,6 +355,206 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
             if (num_rows != 0) {
                 save_page();
             }
+            break;
+        }
+        }
+    }
+    return ret;
+}
+
+
+///////////////////////////////////////////////////////////////
+/////////// START OF COLUMNAR STORAGE CODE //////////////////////
+////////////////////////EXERCISE 2 ////////////////////////////
+///////////////////////////////////////////////////////////////
+
+
+std::vector<column_t> scan_column_table(const ColumnarTable& table,
+    const std::vector<std::tuple<size_t, DataType>>& output_attrs, const size_t& table_id){
+    
+    namespace views = ranges::views;
+    
+    //Initialize result vector with columns which will hold the scanned data from the columnar table
+    std::vector<column_t> results;
+    results.reserve(output_attrs.size());
+    for (auto& [in_col_idx, dtype] : output_attrs) {
+        results.emplace_back(dtype); // initialize the data type 
+    }
+    
+    //For each column of the columnar table extract the data end insert into the result vector of  column_t
+    auto task = [&](size_t begin, size_t end) {
+        for (size_t column_idx = begin; column_idx < end; ++column_idx) {
+            size_t in_col_idx = std::get<0>(output_attrs[column_idx]); //index of the column (in which column we are at the moment)
+            auto& in_column = table.columns[in_col_idx]; //save the column  we want to convert 
+            auto& out_col = results[column_idx]; // save the output column where we will insert the converted data
+            
+            size_t row_idx = 0;
+            uint16_t page_idx = 0;
+            
+            //Iterate through all pages of the input column and convert data  accordingly      
+            for (auto* page:in_column.pages | views::transform([](auto* page) { return page->data; })) {
+                
+                switch (in_column.type) {
+                case DataType::INT32: {
+
+                    //First read the number of rows, data begin and bitmap from the page
+                    auto num_rows= *reinterpret_cast<uint16_t*>(page);
+                    auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
+                    auto* bitmap =reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                    uint16_t data_idx = 0;
+
+                    //Then for each row we check if the data in null or not 
+                    //and insert it to the output column with the help function insert_value_to_page(implemented in struct column_t)
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+
+                        if (helper::get_bitmap(bitmap, i)) {
+                            auto value = data_begin[data_idx++];
+            
+                            out_col.insert_value_to_page(value_t{
+                                .table_idx = static_cast<uint16_t>(value & 0xFFFF),
+                                .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
+                                .page_idx = page_idx,
+                                .data_idx = helper::INT_VALUE
+                            });
+                        } else {
+                            out_col.insert_value_to_page(value_t{
+                                .table_idx = 0,
+                                .column_idx = 0,
+                                .page_idx = page_idx,
+                                .data_idx = helper::NULL_VALUE
+                            });
+                        }
+                        ++row_idx;
+                    }
+                    break;
+                }
+                case DataType::VARCHAR: {
+
+                    //After we read the number of rows we check if it is a long string page (0xffff)
+                    auto num_rows = *reinterpret_cast<uint16_t*>(page);
+                    if (num_rows == 0xffff) {
+
+                        out_col.insert_value_to_page(value_t{
+                            .table_idx = static_cast<uint16_t>(table_id),
+                            .column_idx = static_cast<uint16_t>(in_col_idx),
+                            .page_idx = page_idx,
+                            .data_idx = 0
+                        });
+                        ++row_idx;
+                    } else if (num_rows != 0xfffe) {
+
+                        //If it is not a long string page we read the bitmap and insert the data accordingly
+                        auto* bitmap =reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                        uint16_t data_idx = 0;
+                        for (uint16_t i = 0; i < num_rows; ++i) {
+                            if (helper::get_bitmap(bitmap, i)) {
+                                out_col.insert_value_to_page(value_t{
+                                    .table_idx = static_cast<uint16_t>(table_id),
+                                    .column_idx = static_cast<uint16_t>(in_col_idx),
+                                    .page_idx = page_idx,
+                                    .data_idx = data_idx
+                                });
+                                ++data_idx;
+                            } else {
+                                out_col.insert_value_to_page(value_t{
+                                    .table_idx = 0,
+                                    .column_idx = 0,
+                                    .page_idx = page_idx,
+                                    .data_idx = helper::NULL_VALUE
+                                });
+                            }
+                            ++row_idx;
+                        }
+                    }
+                    break;
+                }
+                }
+                page_idx++; // we go to the next page
+            }
+            out_col.num_rows = row_idx;
+        }
+    };
+    filter_tp.run(task, output_attrs.size());
+    return results;
+}
+
+
+ColumnarTable convert_column_t_to_columnar (
+    const std::vector<column_t>& results,
+    const Plan& plan,
+    const std::vector<DataType>& types)
+{
+    namespace views  = ranges::views;
+    ColumnarTable ret;
+    
+    // Calculate total rows from first column if it exists
+    ret.num_rows = results.empty() ? 0 : results[0].num_rows;
+    
+    //For each column_t in results  create a Column in ColumnarTable  and insert the data accordingly
+    for (auto [col_idx, data_type]: types | views::enumerate) {
+        ret.columns.emplace_back(data_type); //Creation of the Column with initialized datatype
+        auto& out_column = ret.columns.back(); //save the reference to the last column created
+        const auto& in_col = results[col_idx]; //save the reference to the current column_t we want to convert data
+                  
+        switch (data_type) {
+        case DataType::INT32: {
+     
+            //Create a ColumnInserter  to help with inserting data into the column of the ColumnarTable          
+            ColumnInserter<int32_t> inserter(out_column);
+                       
+            // Iterate through all pages in this column_t
+            for (auto* page : in_col.pages) {
+
+                //Read number of rows and where the entries begin (value_t entries)
+                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                auto* data_begin = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+                
+                //For each value_t entry check if it is null or int and insert accordingly
+                for (uint16_t i = 0; i < num_rows; ++i) {
+                    const value_t& value = data_begin[i];
+                    
+                    if (value.data_idx == helper::NULL_VALUE) {
+                        inserter.insert_null();
+                    } else if (value.data_idx == helper::INT_VALUE) {
+                        
+                        int32_t combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |(int32_t(value.table_idx) & 0xFFFF);
+                        inserter.insert(combined_value);
+                    } else {
+                        throw std::runtime_error("Invalid data_idx for INT32 column");
+                    }
+                }
+            }
+            inserter.finalize(); 
+            break;
+        }
+        case DataType::VARCHAR: {
+
+            //Create a ColumnInserter  to help with inserting data into the column of the ColumnarTable
+            ColumnInserter<std::string> inserter(out_column);
+            
+            // Iterate through all pages in this column_t
+            for (auto* page : in_col.pages) {
+                uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                auto* data_begin = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+                
+                //For each value_t entry check if it is null or int and insert accordingly
+                for (uint16_t i = 0; i < num_rows; ++i) {
+                    const value_t& string_meta = data_begin[i];
+                    
+                    if (string_meta.data_idx == helper::NULL_VALUE) {
+                        inserter.insert_null();
+                    } else if (string_meta.data_idx != helper::INT_VALUE) {
+                        
+                        // Materialize the string from the original source
+                        std::string value;
+                        materialize_string(string_meta, plan, value);
+                        inserter.insert(value);
+                    } else {
+                        throw std::runtime_error("Invalid data_idx for VARCHAR column");
+                    }
+                }
+            }
+            inserter.finalize();
             break;
         }
         }
