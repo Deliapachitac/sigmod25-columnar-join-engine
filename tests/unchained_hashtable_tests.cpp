@@ -1,184 +1,278 @@
+// unchained_hashtable_tests.cpp
 #include <catch2/catch_test_macros.hpp>
+#include <vector>
+#include <algorithm>
+#include <numeric>
+#include <random>
+#include <stdexcept>
 #include "unchained_hashtable.h"
 
-/* ============================================================
-   CONSTRUCTION
-============================================================ */
+// ------------------------------------------------------------
+// --- Constructor & Initial State Tests ---
+// ------------------------------------------------------------
 
-TEST_CASE("UnchainedHT basic construction", "[unchained_ht]") {
-    unchained_ht ht(128);
+TEST_CASE("Default constructor initializes empty, unbuilt table", "[unchained_ht]") {
+    unchained_ht ht;
 
-
-    ht.finalize_build();
-    // table_size is rounded to next power of 2
-    // 128 is already power of 2
-    REQUIRE(ht.lookup(0).first == nullptr); // not built yet, but lookup throws
+    REQUIRE(ht.get_tuple_count() == 0);
 }
 
-TEST_CASE("UnchainedHT next power of two behavior", "[unchained_ht]") {
-    unchained_ht ht(300); // should round to 512
-
-    
-
-    // Can't directly access table_size (private),
-    // but check build_insert + finalize + lookup basic behavior.
-    ht.build_insert(1, 11);
-    ht.finalize_build();
-
-    auto [s,e] = ht.lookup(1);
-    REQUIRE(s != nullptr);
-    REQUIRE(e == s + 1);
-    REQUIRE(s->value == 11);
+TEST_CASE("Probe before finalize throws", "[unchained_ht]") {
+    unchained_ht ht;
+    REQUIRE_THROWS_AS(ht.probe(42), std::runtime_error);
 }
 
-/* ============================================================
-   INSERT + FINALIZE + LOOKUP
-============================================================ */
-
-TEST_CASE("UnchainedHT simple insert and lookup", "[unchained_ht]") {
-    unchained_ht ht(64);
-
-    ht.build_insert(1, 100);
-    ht.build_insert(2, 200);
-    ht.build_insert(3, 300);
-
-    ht.finalize_build();
-
-    auto [s1,e1] = ht.lookup(1);
-    REQUIRE(s1 != nullptr);
-    REQUIRE(e1 == s1 + 1);
-    REQUIRE(s1->value == 100);
-
-    auto [s2,e2] = ht.lookup(2);
-    REQUIRE(s2 != nullptr);
-    REQUIRE(e2 == s2 + 1);
-    REQUIRE(s2->value == 200);
-
-    auto [s3,e3] = ht.lookup(3);
-    REQUIRE(s3 != nullptr);
-    REQUIRE(e3 == s3 + 1);
-    REQUIRE(s3->value == 300);
-
-    auto [s4,e4] = ht.lookup(42);
-    REQUIRE(s4 == nullptr);
-    REQUIRE(e4 == nullptr);
-}
-
-TEST_CASE("UnchainedHT duplicate key behavior", "[unchained_ht]") {
-    unchained_ht ht(64);
-
-    ht.build_insert(5, 10);
-    ht.build_insert(5, 20);
-    ht.build_insert(5, 30);
-
-    ht.finalize_build();
-
-    auto [s,e] = ht.lookup(5);
-    REQUIRE(s != nullptr);
-    REQUIRE(e != nullptr);
-    REQUIRE(e - s == 3);
-
-    REQUIRE(s[0].value == 10);
-    REQUIRE(s[1].value == 20);
-    REQUIRE(s[2].value == 30);
-}
-
-/* ============================================================
-   FINALIZATION / ERROR HANDLING
-============================================================ */
-
-TEST_CASE("UnchainedHT lookup before finalize throws", "[unchained_ht]") {
-    unchained_ht ht(32);
-    ht.build_insert(1, 10);
-
-    REQUIRE_THROWS(ht.lookup(1));
-}
-
-TEST_CASE("UnchainedHT double finalize is harmless", "[unchained_ht]") {
-    unchained_ht ht(32);
-
-    ht.build_insert(1, 99);
-    ht.finalize_build();
+TEST_CASE("Finalize on empty table is allowed", "[unchained_ht]") {
+    unchained_ht ht;
     REQUIRE_NOTHROW(ht.finalize_build());
+    REQUIRE(ht.get_tuple_count() == 0);
 
-    auto [s,e] = ht.lookup(1);
-    REQUIRE(s != nullptr);
-    REQUIRE(s->value == 99);
+    auto res = ht.probe(1);
+    REQUIRE(res.empty());
 }
 
-TEST_CASE("UnchainedHT insert after finalize throws", "[unchained_ht]") {
-    unchained_ht ht(32);
 
-    ht.build_insert(10, 100);
+// ------------------------------------------------------------
+// --- Build Insert Tests ---
+// ------------------------------------------------------------
+
+TEST_CASE("Single insert then finalize", "[unchained_ht]") {
+    unchained_ht ht;
+
+    ht.build_insert(10, 123);
     ht.finalize_build();
 
-    REQUIRE_THROWS(ht.build_insert(20, 200));
+    REQUIRE(ht.get_tuple_count() == 1);
+    REQUIRE(ht.get_directory_size() >= 1);
+
+    auto res = ht.probe(10);
+    REQUIRE(res.size() == 1);
+    REQUIRE(res[0] == 123);
 }
 
-/* ============================================================
-   BLOOM FILTER / LOAD STRESS
-============================================================ */
+TEST_CASE("Multiple inserts with distinct keys", "[unchained_ht]") {
+    unchained_ht ht;
 
-TEST_CASE("UnchainedHT medium stress test", "[unchained_ht]") {
-    constexpr size_t N = 50000;
-    unchained_ht ht(N);
-
-    for (size_t i = 0; i < N; ++i)
-        ht.build_insert((int32_t)i, i * 3);
+    for (int i = 0; i < 100; ++i)
+        ht.build_insert(i, i * 10);
 
     ht.finalize_build();
 
-    for (size_t i = 0; i < N; i += 7777) {
-        auto [s,e] = ht.lookup((int32_t)i);
-        REQUIRE(s != nullptr);
-        REQUIRE(s->value == i * 3);
+    REQUIRE(ht.get_tuple_count() == 100);
+
+    for (int i = 0; i < 100; ++i) {
+        auto res = ht.probe(i);
+        REQUIRE(res.size() == 1);
+        REQUIRE(res[0] == static_cast<size_t>(i * 10));
     }
-
-    auto [s2,e2] = ht.lookup((int32_t)(N + 12345));
-    REQUIRE(s2 == nullptr);
 }
 
-TEST_CASE("UnchainedHT large contiguous duplicate keys", "[unchained_ht]") {
-    unchained_ht ht(4096);
+TEST_CASE("Insert after finalize throws", "[unchained_ht]") {
+    unchained_ht ht;
+    ht.build_insert(1, 1);
+    ht.finalize_build();
 
-    for (int i = 0; i < 10000; ++i)
-        ht.build_insert(777, i);
+    REQUIRE_THROWS_AS(ht.build_insert(2, 2), std::runtime_error);
+}
+
+
+// ------------------------------------------------------------
+// --- Duplicate Key Tests ---
+// ------------------------------------------------------------
+
+TEST_CASE("Duplicate keys produce multiple values", "[unchained_ht]") {
+    unchained_ht ht;
+
+    ht.build_insert(7, 100);
+    ht.build_insert(7, 200);
+    ht.build_insert(7, 300);
+    ht.finalize_build();
+
+    auto res = ht.probe(7);
+    REQUIRE(res.size() == 3);
+
+    std::sort(res.begin(), res.end());
+    REQUIRE(res == std::vector<size_t>{100, 200, 300});
+}
+
+TEST_CASE("Duplicate and unique keys mixed", "[unchained_ht]") {
+    unchained_ht ht;
+
+    ht.build_insert(1, 10);
+    ht.build_insert(2, 20);
+    ht.build_insert(1, 11);
+    ht.build_insert(3, 30);
+    ht.build_insert(2, 21);
 
     ht.finalize_build();
 
-    auto [s,e] = ht.lookup(777);
-    REQUIRE(s != nullptr);
-    REQUIRE(e != nullptr);
-    REQUIRE(e - s == 10000);
+    auto r1 = ht.probe(1);
+    auto r2 = ht.probe(2);
+    auto r3 = ht.probe(3);
 
-    REQUIRE(s[0].value == 0);
-    REQUIRE(s[9999].value == 9999);
+    REQUIRE(r1.size() == 2);
+    REQUIRE(r2.size() == 2);
+    REQUIRE(r3.size() == 1);
+
+    std::sort(r1.begin(), r1.end());
+    std::sort(r2.begin(), r2.end());
+
+    REQUIRE(r1 == std::vector<size_t>{10, 11});
+    REQUIRE(r2 == std::vector<size_t>{20, 21});
+    REQUIRE(r3[0] == 30);
 }
 
-/* ============================================================
-   RANDOMIZED INSERT/LOOKUP STRESS
-============================================================ */
 
-TEST_CASE("UnchainedHT random stress test", "[unchained_ht]") {
-    constexpr size_t N = 80000;
+// ------------------------------------------------------------
+// --- Negative & Large Key Tests ---
+// ------------------------------------------------------------
 
-    std::vector<int32_t> keys;
-    keys.reserve(N);
+TEST_CASE("Negative keys work correctly", "[unchained_ht]") {
+    unchained_ht ht;
 
-    for (size_t i = 0; i < N; ++i)
-        keys.push_back(rand());
+    ht.build_insert(-1, 111);
+    ht.build_insert(-100, 222);
+    ht.build_insert(-1, 333);
+    ht.finalize_build();
 
-    unchained_ht ht(N);
+    auto r1 = ht.probe(-1);
+    auto r2 = ht.probe(-100);
+
+    REQUIRE(r1.size() == 2);
+    REQUIRE(r2.size() == 1);
+
+    std::sort(r1.begin(), r1.end());
+    REQUIRE(r1 == std::vector<size_t>{111, 333});
+    REQUIRE(r2[0] == 222);
+}
+
+TEST_CASE("Extreme int32 keys", "[unchained_ht]") {
+    unchained_ht ht;
+
+    ht.build_insert(INT32_MIN, 1);
+    ht.build_insert(INT32_MAX, 2);
+    ht.finalize_build();
+
+    auto rmin = ht.probe(INT32_MIN);
+    auto rmax = ht.probe(INT32_MAX);
+
+    REQUIRE(rmin.size() == 1);
+    REQUIRE(rmax.size() == 1);
+    REQUIRE(rmin[0] == 1);
+    REQUIRE(rmax[0] == 2);
+}
+
+
+// ------------------------------------------------------------
+// --- Bloom Filter / False Negative Safety ---
+// ------------------------------------------------------------
+
+TEST_CASE("Bloom filter never rejects real keys", "[unchained_ht]") {
+    unchained_ht ht;
+
+    constexpr int N = 1000;
+    for (int i = 0; i < N; ++i)
+        ht.build_insert(i, i + 5);
+
+    ht.finalize_build();
+
+    for (int i = 0; i < N; ++i) {
+        auto res = ht.probe(i);
+        REQUIRE(res.size() == 1);
+        REQUIRE(res[0] == static_cast<size_t>(i + 5));
+    }
+}
+
+TEST_CASE("Non-existent keys return empty result", "[unchained_ht]") {
+    unchained_ht ht;
+
+    for (int i = 0; i < 200; ++i)
+        ht.build_insert(i * 2, i);
+
+    ht.finalize_build();
+
+    for (int i = 0; i < 200; ++i) {
+        auto res = ht.probe(i * 2 + 1);
+        REQUIRE(res.empty());
+    }
+}
+
+
+// ------------------------------------------------------------
+// --- Stress & Randomized Tests ---
+// ------------------------------------------------------------
+
+TEST_CASE("Large randomized build and probe", "[unchained_ht][stress]") {
+    unchained_ht ht;
+
+    constexpr size_t N = 50'000;
+    std::vector<int32_t> keys(N);
+    std::iota(keys.begin(), keys.end(), 0);
+
+    std::mt19937 rng(123);
+    std::shuffle(keys.begin(), keys.end(), rng);
 
     for (size_t i = 0; i < N; ++i)
         ht.build_insert(keys[i], i);
 
     ht.finalize_build();
 
-    for (size_t i = 0; i < N; i += 5000) {
-        auto [s,e] = ht.lookup(keys[i]);
-        REQUIRE(s != nullptr);
-        REQUIRE(s->value == i);
+    REQUIRE(ht.get_tuple_count() == N);
+    REQUIRE(ht.get_directory_size() >= N / 0.65);
+
+    for (size_t i = 0; i < N; ++i) {
+        auto res = ht.probe(keys[i]);
+        REQUIRE(res.size() == 1);
     }
 }
 
+TEST_CASE("Heavy skew: all keys identical", "[unchained_ht][stress]") {
+    unchained_ht ht;
+
+    constexpr size_t N = 10'000;
+    for (size_t i = 0; i < N; ++i)
+        ht.build_insert(42, i);
+
+    ht.finalize_build();
+
+    auto res = ht.probe(42);
+    REQUIRE(res.size() == N);
+
+    std::sort(res.begin(), res.end());
+    REQUIRE(res.front() == 0);
+    REQUIRE(res.back() == N - 1);
+}
+
+
+// ------------------------------------------------------------
+// --- Directory & Load Factor Properties ---
+// ------------------------------------------------------------
+
+TEST_CASE("Directory size is power of two", "[unchained_ht]") {
+    unchained_ht ht;
+
+    for (int i = 0; i < 1234; ++i)
+        ht.build_insert(i, i);
+
+    ht.finalize_build();
+
+    size_t dir = ht.get_directory_size();
+    REQUIRE(dir != 0);
+    REQUIRE((dir & (dir - 1)) == 0); // power of two
+}
+
+TEST_CASE("Finalize is idempotent", "[unchained_ht]") {
+    unchained_ht ht;
+
+    for (int i = 0; i < 10; ++i)
+        ht.build_insert(i, i);
+
+    ht.finalize_build();
+    auto dir1 = ht.get_directory_size();
+    auto cnt1 = ht.get_tuple_count();
+
+    REQUIRE_NOTHROW(ht.finalize_build());
+
+    REQUIRE(ht.get_directory_size() == dir1);
+    REQUIRE(ht.get_tuple_count() == cnt1);
+}

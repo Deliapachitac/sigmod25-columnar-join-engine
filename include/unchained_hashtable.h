@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 #include <iostream>
-#include <cstring> // for memset
+#include <cstring> /* for memset */
 
 class unchained_ht
 {
@@ -37,6 +37,7 @@ private:
     Tuple *array = nullptr;
     size_t tuple_count = 0;
 
+    /* Directory storage */
     uint64_t *directory_raw = nullptr;
     uint64_t *directory     = nullptr;
 
@@ -81,12 +82,14 @@ public:
     /* Finalize: build directory + pack tuples into contiguous array */
     void finalize_build();
 
-    /* Probe: return range [start, end) of matching tuples */
+    /* Probe: return vector of matching values for a key */
     std::vector<size_t> probe(int32_t key) const;
 
     /* Test functions for the hashtable */
     size_t get_directory_size() const { return directory_size; }
     size_t get_tuple_count()   const { return tuple_count;    }
+    bool built() const { return isBuilt; }
+    size_t get_build_buffer_size() const { return build_buffer.size(); }
 };
 
 #endif // UNCHAINED_HASHTABLE_H

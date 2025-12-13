@@ -3,7 +3,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#include <immintrin.h> // for _mm_crc32_u32, _mm_crc32_u64
+#include <immintrin.h> /* for _mm_crc32_u32, _mm_crc32_u64 */
 #include <algorithm>
 #include <random>
 #include <bitset>
@@ -100,51 +100,51 @@ void unchained_ht::finalize_build()
     directory = directory_raw + 1;
     directory[-1] = 0;
 
-    // Allocate final contiguous storage
+    /* Allocate final contiguous storage */
     array = new Tuple[tuple_count];
 
-    // 1) Count tuples per slot and build Bloom filters
+    /* Step 1. Count tuples per slot and build Bloom filters */
     for (const Tuple &t : build_buffer)
     {
         uint64_t slot = t.hash >> shift;
 
-        uint64_t count = (directory[slot] >> 16) + 1; // increment tuple count
+        uint64_t count = (directory[slot] >> 16) + 1; /* increment tuple count at the directory slot */
         uint16_t bloom = static_cast<uint16_t>(directory[slot]) | tags[(uint32_t)t.hash >> (32 - 11)];
 
-        directory[slot] = (count << 16) | bloom;
+        directory[slot] = (count << 16) | bloom; /* update directory slot with new count and bloom filter */
     }
 
-    // 2) Exclusive prefix sum over counts to get starting indices
+    /* Step 2. Exclusive prefix sum over counts to get starting indices */
     size_t running = 0;
     for (size_t i = 0; i < directory_size; i++)
     {
-        uint64_t count = directory[i] >> 16;
-        uint16_t bloom = static_cast<uint16_t>(directory[i]);
+        uint64_t count = directory[i] >> 16; /* number of tuples in this slot */
+        uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */
 
-        directory[i] = (running << 16) | bloom; // store start index
-        running += count;
+        directory[i] = (running << 16) | bloom; /* store start index */
+        running += count; /* update running total */
     }
 
-    // Start index for slot 0 is 0
+    /* Start index for slot 0 is 0 */
     directory[-1] = 0;
 
-    // 3) Scatter tuples into their final positions, updating ends
+    /* Step 3. Scatter tuples into their final positions, updating ends */
     for (const Tuple &t : build_buffer)
     {
-        uint64_t slot = t.hash >> shift;
+        uint64_t slot = t.hash >> shift; 
 
-        uint64_t pos = directory[slot] >> 16; // current write position
+        uint64_t pos = directory[slot] >> 16; /* current write position */
 
         array[pos] = t;
 
         uint16_t bloom = static_cast<uint16_t>(directory[slot]);
-        directory[slot] = ((pos + 1) << 16) | bloom; // advance end pointer
+        directory[slot] = ((pos + 1) << 16) | bloom; /* advance end pointer */
     }
 
     isBuilt = true;
 }
 
-
+/* Probe function, returns vector of matching values */
 std::vector<size_t>
 unchained_ht::probe(int32_t key) const
 {
@@ -156,26 +156,29 @@ unchained_ht::probe(int32_t key) const
     if (tuple_count == 0)
         return result;
 
+    /* Compute hash and slot */
     uint64_t h = hash_key(key);
     uint64_t slot = h >> shift;
 
+    /* Load directory entry */
     uint64_t entry = directory[slot];
     uint16_t bloom = static_cast<uint16_t>(entry);
 
-    /* Bloom filter check -- reject early if impossible match */
+    /* Bloom filter check, reject early if impossible match */
     if (!could_contain(bloom, h))
     {
         return result;
     }
     
-    // Range for this hash-prefix slot
+    /* Range for this hash-prefix slot */
     uint64_t start_off = directory[slot - 1] >> 16;
     uint64_t end_off   = directory[slot]     >> 16;
 
+    /* Get pointers to the beginning and end of the range */
     const Tuple* begin = array + start_off;
     const Tuple* end   = array + end_off;
 
-    // Collect only matching tuples
+    /* Collect only matching tuples */
     for (auto p = begin; p < end; ++p)
         if (p->key == key)
         {
