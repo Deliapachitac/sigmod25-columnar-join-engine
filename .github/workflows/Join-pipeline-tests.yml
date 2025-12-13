@@ -16,5 +16,6 @@ jobs:
       - run: ./build/rh_unit_tests
       - run: ./build/cuckoo_unit_tests
       - run: ./build/Integration_tests
+      - run: ./build/unchained_ht_tests
       
       - run: echo "🍏 This job's status is ${{ job.status }}."
