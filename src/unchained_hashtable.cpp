@@ -9,6 +9,8 @@
 #include <bitset>
 
 
+/* SHOULD DO PARALLEL */
+
 /* Constructor */
 unchained_ht::unchained_ht()
 {
