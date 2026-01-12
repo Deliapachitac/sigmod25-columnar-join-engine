@@ -6,6 +6,7 @@
 #include <vector>
 #include <iostream>
 #include <cstring> /* for memset */
+#include <slab_allocator.h>
 
 class unchained_ht
 {
@@ -13,11 +14,32 @@ private:
     /* Tuple Layout, for the contiguous array */
     struct Tuple
     {
-        int32_t  key;
-        uint64_t hash;  /* Full hash to save time on rehashing */
-        size_t   value;
+        int32_t key;
+        uint64_t hash; /* Full hash to save time on rehashing */
+        size_t value;
     };
 
+    /* Tuple data for each partition*/
+    struct PartitionBuffer
+    {
+        TupleAllocator allocator;
+        size_t count;
+    };
+
+    /* Per-thread partitions*/
+    struct ThreadBuildState
+    {
+        ThreadAllocator allocator;
+        std::vector<PartitionBuffer> partitions;
+    };
+
+    /* Parallel safe build buffers (temporary storage before finalization) */
+    GlobalAllocator global_allocator;
+    std::vector<ThreadBuildState> thread_states;
+    size_t num_threads;
+    size_t num_partitions;
+    
+    
     /* Build-state flag */
     bool isBuilt = false;
 
@@ -30,16 +52,13 @@ private:
     /* How many bits to shift hash >> shift to get slot index */
     uint64_t shift;
 
-    /* Temporary buffer (before finalization) */
-    std::vector<Tuple> build_buffer;
-
     /* Final contiguous tuple storage */
     Tuple *array = nullptr;
     size_t tuple_count = 0;
 
     /* Directory storage */
     uint64_t *directory_raw = nullptr;
-    uint64_t *directory     = nullptr;
+    uint64_t *directory = nullptr;
 
     /* Precomputed tags used in Bloom filters (rounded to 2048) */
     uint16_t tags[2048];
@@ -77,7 +96,7 @@ public:
     unchained_ht();
 
     /* Insert tuple during build (store in temporary buffer) */
-    void build_insert(int32_t key, size_t value);
+    void build_insert(int32_t key, size_t value, size_t thread_id);
 
     /* Finalize: build directory + pack tuples into contiguous array */
     void finalize_build();
@@ -87,9 +106,8 @@ public:
 
     /* Test functions for the hashtable */
     size_t get_directory_size() const { return directory_size; }
-    size_t get_tuple_count()   const { return tuple_count;    }
+    size_t get_tuple_count() const { return tuple_count; }
     bool built() const { return isBuilt; }
-    size_t get_build_buffer_size() const { return build_buffer.size(); }
 };
 
 #endif // UNCHAINED_HASHTABLE_H

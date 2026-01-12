@@ -8,31 +8,55 @@
 #include <random>
 #include <bitset>
 
-
 /* Constructor */
 unchained_ht::unchained_ht()
 {
     /* Initialize the tuple count */
     tuple_count = 0;
+
+    /* Initialize the number of threads and partitions */
+    num_threads = 8;
+    num_partitions = 8;
+
+    thread_states.reserve(num_threads);
+
+    /* Set up the per-thread build states */
+    for (size_t t = 0; t < num_threads; ++t)
+    {
+        thread_states.emplace_back(
+            ThreadBuildState{
+                ThreadAllocator(global_allocator),
+                {}});
+
+        auto &partitions = thread_states.back().partitions;
+        partitions.reserve(num_partitions);
+
+        for (size_t p = 0; p < num_partitions; ++p)
+        {
+            partitions.emplace_back(
+                PartitionBuffer{
+                    TupleAllocator(thread_states.back().allocator, sizeof(Tuple)),
+                    0});
+        }
+    }
+
     /* Set up the precomputed tags */
     init_tags();
 }
 
-
 /* Initialize the precomputed tag matrix */
 void unchained_ht::init_tags()
-{   
+{
     /* Initialize the pattern vector */
     std::vector<uint16_t> patterns;
     patterns.reserve(1820);
-    
+
     /* Set the masks */
     for (int a = 0; a < 16; a++)
         for (int b = a + 1; b < 16; b++)
             for (int c = b + 1; c < 16; c++)
                 for (int d = c + 1; d < 16; d++)
                     patterns.push_back((1u << a) | (1u << b) | (1u << c) | (1u << d));
-
 
     /* Suffle the patterns */
     std::mt19937 rng(2200058);
@@ -53,20 +77,24 @@ uint64_t unchained_ht::hash_key(int32_t key) const
 }
 
 /* Insert the tuples and store them in temporary array */
-void unchained_ht::build_insert(int32_t key, size_t value)
-{   
-    /* Cannot insert after building */
+void unchained_ht::build_insert(int32_t key, size_t value, size_t thread_id)
+{
+    /* If the table is already built, ignore */
     if (isBuilt)
-        throw std::runtime_error("Hash table already finalized.");
+        throw std::runtime_error("Hash table already built.");
 
-    /* Store the tuple correctly */
-    Tuple t;
-    t.key = key;
-    t.value = value;
-    t.hash = hash_key(key);
+    /* Get the Hash */
+    uint64_t hash = hash_key(key);
 
-    /* Put it in the buffer */
-    build_buffer.push_back(t);
+    /* Get the partition */
+    size_t partition = hash >> (64 - __builtin_ctzll(num_partitions));
+
+    /* Allocate the tuple in the appropriate thread/partition buffer */
+    PartitionBuffer &pb = thread_states[thread_id].partitions[partition];
+    Tuple *t = static_cast<Tuple *>(pb.allocator.allocate_tuple());
+
+    *t = {key, hash, value};
+    pb.count++;
 }
 
 /* Finalize the build, to get ready to probe */
@@ -77,13 +105,15 @@ void unchained_ht::finalize_build()
         return;
 
     /* Check the number of tuples,  */
-    tuple_count = build_buffer.size();
+    tuple_count = 0;
+    for (size_t t = 0; t < num_threads; ++t)
+        for (size_t p = 0; p < num_partitions; ++p)
+            tuple_count += thread_states[t].partitions[p].count;
     if (tuple_count == 0)
     {
         isBuilt = true;
         return;
     }
-
 
     /* Allocate the directory */
     directory_size = next_power_of_2(static_cast<size_t>(tuple_count / load_factor) + 1);
@@ -103,41 +133,60 @@ void unchained_ht::finalize_build()
     array = new Tuple[tuple_count];
 
     /* Step 1. Count tuples per slot and build Bloom filters */
-    for (const Tuple &t : build_buffer)
+    for (size_t p = 0; p < num_partitions; ++p)
     {
-        uint64_t slot = t.hash >> shift;
+        for (size_t t = 0; t < num_threads; ++t)
+        {
+            PartitionBuffer &pb = thread_states[t].partitions[p];
 
-        uint64_t count = (directory[slot] >> 16) + 1; /* increment tuple count at the directory slot */
-        uint16_t bloom = static_cast<uint16_t>(directory[slot]) | tags[(uint32_t)t.hash >> (32 - 11)];
+            pb.allocator.for_each_tuple([&](const char *ptr)
+                                        {
+    const Tuple& tup = *reinterpret_cast<const Tuple*>(ptr);
 
-        directory[slot] = (count << 16) | bloom; /* update directory slot with new count and bloom filter */
+    uint64_t slot = tup.hash >> shift;
+
+    uint64_t count = (directory[slot] >> 16) + 1;
+    uint16_t bloom =
+        static_cast<uint16_t>(directory[slot]) |
+        tags[(uint32_t)tup.hash >> (32 - 11)];
+
+    directory[slot] = (count << 16) | bloom; });
+        }
     }
 
     /* Step 2. Exclusive prefix sum over counts to get starting indices */
     size_t running = 0;
     for (size_t i = 0; i < directory_size; i++)
     {
-        uint64_t count = directory[i] >> 16; /* number of tuples in this slot */
+        uint64_t count = directory[i] >> 16;                  /* number of tuples in this slot */
         uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */
 
         directory[i] = (running << 16) | bloom; /* store start index */
-        running += count; /* update running total */
+        running += count;                       /* update running total */
     }
 
     /* Start index for slot 0 is 0 */
     directory[-1] = 0;
 
     /* Step 3. Scatter tuples into their final positions, updating ends */
-    for (const Tuple &t : build_buffer)
+    for (size_t p = 0; p < num_partitions; ++p)
     {
-        uint64_t slot = t.hash >> shift; 
+        for (size_t t = 0; t < num_threads; ++t)
+        {
+            PartitionBuffer &pb = thread_states[t].partitions[p];
 
-        uint64_t pos = directory[slot] >> 16; /* current write position */
+            pb.allocator.for_each_tuple([&](const char *ptr)
+                                        {
+    const Tuple& tup = *reinterpret_cast<const Tuple*>(ptr);
 
-        array[pos] = t;
+    uint64_t slot = tup.hash >> shift;
+    uint64_t pos  = directory[slot] >> 16;
 
-        uint16_t bloom = static_cast<uint16_t>(directory[slot]);
-        directory[slot] = ((pos + 1) << 16) | bloom; /* advance end pointer */
+    array[pos] = tup;
+
+    uint16_t bloom = static_cast<uint16_t>(directory[slot]);
+    directory[slot] = ((pos + 1) << 16) | bloom; });
+        }
     }
 
     isBuilt = true;
@@ -168,14 +217,14 @@ unchained_ht::probe(int32_t key) const
     {
         return result;
     }
-    
+
     /* Range for this hash-prefix slot */
     uint64_t start_off = directory[slot - 1] >> 16;
-    uint64_t end_off   = directory[slot]     >> 16;
+    uint64_t end_off = directory[slot] >> 16;
 
     /* Get pointers to the beginning and end of the range */
-    const Tuple* begin = array + start_off;
-    const Tuple* end   = array + end_off;
+    const Tuple *begin = array + start_off;
+    const Tuple *end = array + end_off;
 
     /* Collect only matching tuples */
     for (auto p = begin; p < end; ++p)
@@ -183,7 +232,6 @@ unchained_ht::probe(int32_t key) const
         {
             result.push_back(p->value);
         }
-            
 
     return result;
 }
