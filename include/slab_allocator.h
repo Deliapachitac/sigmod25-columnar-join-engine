@@ -14,7 +14,6 @@ class GlobalAllocator
 {
 private:
     std::vector<void *> chunks_; /* Vector to hold allocated chunks */
-
 public:
     /* Allocate a new Large chunk of memory */
     void *allocate()
