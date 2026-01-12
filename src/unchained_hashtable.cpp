@@ -9,14 +9,11 @@
 #include <bitset>
 
 
-/* SHOULD DO PARALLEL */
-
 /* Constructor */
 unchained_ht::unchained_ht()
 {
     /* Initialize the tuple count */
     tuple_count = 0;
-
     /* Set up the precomputed tags */
     init_tags();
 }
