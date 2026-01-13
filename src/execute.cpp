@@ -59,33 +59,55 @@ struct JoinAlgorithm {
         
         //for every page in the column we exctract the key and insert it into the hash table
         size_t row_idx = 0;
-        for(auto* page: column.pages) {
 
-            //The page contains a number of rows and then the value_t entries . We save save the references to variables       
-            uint16_t num_rows= *reinterpret_cast<uint16_t*>(page->data);
-            auto* buffer= reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-            
-            //for each value_t entry wecheck  if it is null or int and insert in the hash table 
-            for (uint16_t i = 0; i < num_rows; i++)
-            {
-                const value_t& record = buffer[i];
-                if(record.data_idx == 0xFFFF) {
-                    row_idx++;
-                    continue;
-                }
-            
-                int32_t key = ((int32_t(record.column_idx) & 0xFFFF)<< 16) |(int32_t(record.table_idx)  & 0xFFFF);
+        //If the column contains int32 entries with null values so we are maintaining the same logic as before 
+        if (column.valid){
+            for(auto* page: column.pages) {
+
+                //The page contains a number of rows and then the value_t entries . We save save the references to variables       
+                uint16_t num_rows= *reinterpret_cast<uint16_t*>(page->data);
+                auto* buffer= reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
                 
-                //If key already exists  we insert the row index in the vector of the row indexes
-                //else we create a new entry 
-                if (key >= 0) {
-                    hash_table.build_insert(key, row_idx);
-                    row_idx++;
-                } else {
-                    throw std::runtime_error("wrong type of field");
+                //for each value_t entry wecheck  if it is null or int and insert in the hash table 
+                for (uint16_t i = 0; i < num_rows; i++)
+                {
+                    const value_t& record = buffer[i];
+                    if(record.data_idx == 0xFFFF) {
+                        row_idx++;
+                        continue;
+                    }
+                
+                    int32_t key = ((int32_t(record.column_idx) & 0xFFFF)<< 16) |(int32_t(record.table_idx)  & 0xFFFF);
+                    
+                    //If key already exists  we insert the row index in the vector of the row indexes
+                    //else we create a new entry 
+                    if (key >= 0) {
+                        hash_table.build_insert(key, row_idx);
+                        row_idx++;
+                    } else {
+                        throw std::runtime_error("wrong type of field");
+                    }
                 }
             }
+
+        }else{
+        // if the column contains only int32 entries without null values
+            for(auto* page: column.pages) {
+
+                //The page contains a number of rows and then the int32_t entries . We save save the references to variables
+                auto num_rows = *reinterpret_cast<uint16_t*>(page->data);
+                auto* buffer= reinterpret_cast<int32_t*>(page->data + 4);
+                
+                for (uint16_t i = 0; i < num_rows; i++) {
+                    int32_t key = buffer[i];   
+                    hash_table.build_insert(key , row_idx);        
+                    row_idx++;
+                }
+            }
+
         }
+
+        
     }
 
 
@@ -123,8 +145,24 @@ struct JoinAlgorithm {
         //Get the pointer to the page and where the value_t entries begin
         // and return the value_t entry at the  index we calculated earlier
         auto* page = col.pages[page_idx];
-        auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-        return buf[local_idx];
+
+
+        //If the column contains int32 entries with null values so we are maintaining the same logic as before 
+        if(col.valid){
+            auto* buf = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
+            return buf[local_idx];
+        }
+        else{
+        //This column contains only int32 entries without null values
+            auto* data_begin = reinterpret_cast<int32_t*>(page->data + 4);
+            int32_t value = data_begin[local_idx];
+            return value_t{
+                .table_idx = static_cast<uint16_t>(value & 0xFFFF),
+                .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
+                .page_idx = 0,
+                .data_idx = 0xFFFE  // INT_VALUE marker
+            };
+        }
     }
 
     void probe_phase(HashTable& hash_table, ExecuteResult& left, ExecuteResult& right, bool is_left) {
@@ -159,61 +197,121 @@ struct JoinAlgorithm {
         //For each page of the second column (the probe  side)we excract the number of rows and then the value_t entries . We save save the references to variables       
         for(auto* page: probe_col.pages) {
             uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
-            auto* buffer = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
             
-            for (uint16_t i = 0; i < num_rows; i++) {
-                const value_t& record = buffer[i];
-                // If the value is null we skip it
-                if(record.data_idx == 0xFFFF) {
-                    probe_row_idx++;
-                    continue;
-                }
+            //If the col contains int32 entries with null values   we are maintaining the same logic as before
+            if (probe_col.valid) {
+                auto* buffer = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
                 
-                int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |  (int32_t(record.table_idx)  & 0xFFFF);
-                
-                //After getting the key we check if it exists in the hash table or not, and get the vector of matching row indexes   
-                auto matches = hash_table.probe(key);
-
-                //The key here exists so we need to iterate through all matching rows from the build side (the table we extracter with the previous function)
-                if (!matches.empty()) {
-                    for (auto build_row_idx: matches) {
-
-                        //For each column of the table (left and right) we need to get the value_t entry and insert it into the output column_t
-                        for (size_t out_col_idx = 0; out_col_idx < output_attrs.size(); ++out_col_idx) {
-                            size_t src_col_idx = std::get<0>(output_attrs[out_col_idx]);
-                            value_t value_to_insert;
-                            
-                            // If we are building from the left table and probing from the right table
-                            if (is_left) {
-                                
-                                //If src_col_idx is in range [0,left.size] we get the value from the left table          
-                                if (src_col_idx < left.size()) {
-                                    value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], build_row_idx);
-                                //Else  we get the value from the right table      
-                                } else {
-                                    value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], probe_row_idx);
-                                }
-
-                            // If we are building from the right table and probing from the left table 
-                            } else {
-
-                                //If src_col_idx is in range [0,left.size] we get the value from the left table
-                                if (src_col_idx < left.size()) {
-                                    value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], probe_row_idx);
-
-                                //Else  we get the value from the right table
-                                } else {
-                                    value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], build_row_idx);
-                                }
-                            }
-                            
-                            results[out_col_idx].insert_value_to_page(value_to_insert);
-                        }
-                        results[0].num_rows++;
+                for (uint16_t i = 0; i < num_rows; i++) {
+                    const value_t& record = buffer[i];
+                    // If the value is null we skip it
+                    if(record.data_idx == 0xFFFF) {
+                        probe_row_idx++;
+                        continue;
                     }
+                    
+                    int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) |  (int32_t(record.table_idx)  & 0xFFFF);
+                    
+                    //After getting the key we check if it exists in the hash table or not, and get the vector of matching row indexes   
+                    auto matches = hash_table.probe(key);
+
+                    //The key here exists so we need to iterate through all matching rows from the build side (the table we extracter with the previous function)
+                    if (!matches.empty()) {
+                        for (auto build_row_idx: matches) {
+
+                            //For each column of the table (left and right) we need to get the value_t entry and insert it into the output column_t
+                            for (size_t out_col_idx = 0; out_col_idx < output_attrs.size(); ++out_col_idx) {
+                                size_t src_col_idx = std::get<0>(output_attrs[out_col_idx]);
+                                value_t value_to_insert;
+                                
+                                // If we are building from the left table and probing from the right table
+                                if (is_left) {
+                                    
+                                    //If src_col_idx is in range [0,left.size] we get the value from the left table          
+                                    if (src_col_idx < left.size()) {
+                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], build_row_idx);
+                                    //Else  we get the value from the right table      
+                                    } else {
+                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], probe_row_idx);
+                                    }
+
+                                // If we are building from the right table and probing from the left table 
+                                } else {
+
+                                    //If src_col_idx is in range [0,left.size] we get the value from the left table
+                                    if (src_col_idx < left.size()) {
+                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], probe_row_idx);
+
+                                    //Else  we get the value from the right table
+                                    } else {
+                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], build_row_idx);
+                                    }
+                                }
+                                
+                                results[out_col_idx].insert_value_to_page(value_to_insert);
+                            }
+                            results[0].num_rows++;
+                        }
+                    }
+                    probe_row_idx++;
                 }
-                probe_row_idx++;
+            } else {
+            ///This column contains only int32 entries without null values
+
+                auto* buffer = reinterpret_cast<int32_t*>(page->data + 4);
+                
+                for (uint16_t i = 0; i < num_rows; i++) {
+                    
+                    int32_t key = buffer[i];
+                    
+                    //After getting the key we check if it exists in the hash table or not, and get the vector of matching row indexes   
+                    auto matches = hash_table.probe(key);
+
+                    //The key here exists so we need to iterate through all matching rows from the build side (the table we extracter with the previous function)
+                    if (!matches.empty()) {
+                        for (auto build_row_idx: matches) {
+
+                            //For each column of the table (left and right) we need to get the value_t entry and insert it into the output column_t
+                            for (size_t out_col_idx = 0; out_col_idx < output_attrs.size(); ++out_col_idx) {
+                                size_t src_col_idx = std::get<0>(output_attrs[out_col_idx]);
+                                value_t value_to_insert;
+                                
+                                // If we are building from the left table and probing from the right table
+                                if (is_left) {
+                                    
+                                    //If src_col_idx is in range [0,left.size] we get the value from the left table          
+                                    if (src_col_idx < left.size()) {
+                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], build_row_idx);
+                                    //Else  we get the value from the right table      
+                                    } else {
+                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], probe_row_idx);
+                                    }
+
+                                // If we are building from the right table and probing from the left table 
+                                } else {
+
+                                    //If src_col_idx is in range [0,left.size] we get the value from the left table
+                                    if (src_col_idx < left.size()) {
+                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], probe_row_idx);
+
+                                    //Else  we get the value from the right table
+                                    } else {
+                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], build_row_idx);
+                                    }
+                                }
+                                
+                                results[out_col_idx].insert_value_to_page(value_to_insert);
+                            }
+                            results[0].num_rows++;
+                        }
+                    }
+                    probe_row_idx++;
+                }
+
+
+
             }
+
         }
         
         // We also need to set the num_rows for all the output columns
