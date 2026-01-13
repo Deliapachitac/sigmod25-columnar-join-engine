@@ -28,11 +28,15 @@ struct column_t {
     size_t num_rows;  // number of rows in the table 
     DataType  type; 
     std::vector<Page*> pages;
+    bool valid;  // true if pages were allocated and should be deleted             
+                 // false ifpages were moved and  should not be deleted       
     
-    column_t(DataType dtype) : num_rows(0), type(dtype), pages() {}
+    column_t(DataType dtype) : num_rows(0), type(dtype), pages(), valid(true) {}
     ~column_t(){
-        for(auto* page: pages){
-            delete page;
+        if (valid) {
+            for(auto* page: pages){
+                delete page;
+            }
         }
     }
 
@@ -40,19 +44,24 @@ struct column_t {
     column_t& operator=(const column_t&) = delete;
 
     column_t(column_t&& other) noexcept
-        : num_rows(other.num_rows), type(other.type), pages(std::move(other.pages)) {
+        : num_rows(other.num_rows), type(other.type), pages(std::move(other.pages)), valid(other.valid) {
         other.pages.clear();
+        other.valid = true;
     }
 
     column_t& operator=(column_t&& other) noexcept {
         if (this != &other) {
-            for (auto* page: pages) {
-                delete page;
+            if (valid) {
+                for (auto* page: pages) {
+                    delete page;
+                }
             }
             num_rows = other.num_rows;
             type  = other.type;
             pages = std::move(other.pages);
+            valid = other.valid;
             other.pages.clear();
+            other.valid = true;
         }
         return *this;
     }
