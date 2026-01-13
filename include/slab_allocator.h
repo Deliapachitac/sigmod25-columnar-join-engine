@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <vector>
 #include <stdexcept>
+#include <iostream>
+#include <mutex>
 
 #define LARGE_CHUNK_SIZE (1024 * 1024) /* Allocate in chunks of 1MB */
 #define SMALL_CHUNK_SIZE (64 * 1024)   /* Allocate small chunks of 64KB */
@@ -13,6 +15,7 @@ class GlobalAllocator
 {
 private:
     std::vector<void *> chunks_; /* Vector to hold allocated chunks */
+    std::mutex mutex_; // The lock that protects 'chunks_'
 public:
     /* Allocate a new Large chunk of memory */
     void *allocate()
@@ -20,9 +23,13 @@ public:
         void *ptr = std::malloc(LARGE_CHUNK_SIZE);
         if (!ptr)
         {
+            
             throw std::bad_alloc();
         }
-        chunks_.push_back(ptr);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            chunks_.push_back(ptr);
+        }
         return ptr;
     }
 
