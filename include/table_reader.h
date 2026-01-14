@@ -1,5 +1,5 @@
 #include <table.h>
-
+#include <thread>
 struct value_t{
     //If data_idx if 0xFFFF then entry is null, if data_idx is 0xFFFE then entry is null and table_idx is the 16 lower bits
     // of the int entry and column_idx is the 16 higher order bits
@@ -27,11 +27,13 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
 struct column_t {
     size_t num_rows;  // number of rows in the table 
     DataType  type; 
+    std::vector<std::vector<Page*>> threadPages;
     std::vector<Page*> pages;
     bool valid;  // true if pages were allocated and should be deleted             
-                 // false ifpages were moved and  should not be deleted       
+                 // false ifpages were moved and  should not be deleted 
+    bool collected = false;      
     
-    column_t(DataType dtype) : num_rows(0), type(dtype), pages(), valid(true) {}
+    column_t(DataType dtype) : threadPages(), num_rows(0), type(dtype), pages(), valid(true) {}
     ~column_t(){
         if (valid) {
             for(auto* page: pages){
@@ -44,7 +46,7 @@ struct column_t {
     column_t& operator=(const column_t&) = delete;
 
     column_t(column_t&& other) noexcept
-        : num_rows(other.num_rows), type(other.type), pages(std::move(other.pages)), valid(other.valid) {
+        : num_rows(other.num_rows), type(other.type), threadPages(std::move(other.threadPages)) ,pages(std::move(other.pages)), valid(other.valid) {
         other.pages.clear();
         other.valid = true;
     }
@@ -59,6 +61,7 @@ struct column_t {
             num_rows = other.num_rows;
             type  = other.type;
             pages = std::move(other.pages);
+            threadPages = std::move(other.threadPages);
             valid = other.valid;
             other.pages.clear();
             other.valid = true;
@@ -82,7 +85,46 @@ struct column_t {
         buf[row_number] = entry;
         ++row_number;
     }
+    void insert_value_to_page(const value_t &entry, size_t tid)
+    {
+        size_t max_rows = (PAGE_SIZE - sizeof(uint16_t)) / sizeof(value_t); 
+        assert(tid < threadPages.size() && "tid must be less that the size of threadPages");
+        auto &pageVector = threadPages[tid];
+        // If the page is full or no page exists, create a new page and initialize the row count
+        if (pageVector.empty() || *reinterpret_cast<uint16_t *>(pageVector.back()->data) >= max_rows)
+        {
+            pageVector.push_back(new Page());
+            *reinterpret_cast<uint16_t *>(pageVector.back()->data) = 0;
+        }
 
+        // Get the pointer to the last page and insert the value_t in the page
+        Page *page = pageVector.back();
+        uint16_t &row_number = *reinterpret_cast<uint16_t *>(page->data);
+        auto *buf = reinterpret_cast<value_t *>(page->data + sizeof(uint16_t));
+        buf[row_number] = entry;
+        ++row_number;
+    }
+
+    void prepare_for_threads(size_t numThreads){
+        if (threadPages.size() < numThreads) {
+            threadPages.resize(numThreads);
+        }
+    }
+
+    void collect_vectors()
+    {
+        assert(!collected && "Page vector has already been collected");
+        size_t totalPages = 0;
+        for (auto &v : threadPages)
+            totalPages += v.size();
+
+        pages.reserve(totalPages);
+        // Use move iterators to avoid expensive copies
+        for (auto& v : threadPages){ 
+            pages.insert(pages.end(), std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
+            v.clear();
+        }
+    }
      
 };
 
