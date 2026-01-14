@@ -9,12 +9,28 @@
 #include <cstdlib>
 #include <algorithm>
 #include <unchained_hashtable.h>
+#include <chrono>
 
 using HashTable = unchained_ht;
 
 namespace Contest {
 
 using ExecuteResult = std::vector<column_t>; 
+
+struct Timer {
+    std::chrono::time_point<std::chrono::high_resolution_clock> start;
+    std::string tag;
+
+    Timer(std::string task) : tag(task) {
+        start = std::chrono::high_resolution_clock::now();
+    }
+
+    ~Timer() {
+        auto end = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<float> duration = end - start;
+        std::cout << tag << " took: " << duration.count() * 1000.0f << "ms" << std::endl;
+    }
+};
 
 ExecuteResult execute_impl(const Plan& plan, size_t node_idx);
 
@@ -33,23 +49,37 @@ struct JoinAlgorithm {
         
         
         if (build_left) { 
+            {
+                Timer time{"Extract keys"};
             //Extract keys from left table and add to hash table
             extract_keys_from_column(hash_table,left[left_col]);
-
+            }
+            {
+                Timer time{"Finalize build"};
             hash_table.finalize_build();
-
+            }
+            {
+            Timer time{"Probe"};
             //in the probe phase we use the hash table to find matches from the right table
             probe_phase(hash_table, left, right, true);
+            }
             
         } else {
-            
+            {
+                Timer time{"Extract keys"};
             //Extract keys from right table and add to hash table      
             extract_keys_from_column(hash_table,right[right_col]);
-
+            }
+            {
+                Timer time{"Finalize build"};
             hash_table.finalize_build();
-
-            //in the probe phase we use the hash table to find matches from the left table
+            }
+            
+            //in the probe phase we use the hash table to find matches from the right table
+            {
+            Timer time{"Probe"};
             probe_phase(hash_table, left, right, false);
+            }
         }
     }
 
@@ -353,6 +383,7 @@ ExecuteResult execute_scan(const Plan&               plan,
     const std::vector<std::tuple<size_t, DataType>>& output_attrs) {
     auto                           table_id = scan.base_table_id;
     auto&                          input    = plan.inputs[table_id];
+    Timer time{"Scan"};
     return scan_column_table(input, output_attrs, table_id); 
 }
 
@@ -376,6 +407,7 @@ ColumnarTable execute(const Plan& plan, [[maybe_unused]] void* context) {
     auto ret_types  = plan.nodes[plan.root].output_attrs
                    | views::transform([](const auto& v) { return std::get<1>(v); })
                    | ranges::to<std::vector<DataType>>();
+    Timer time{"Convert from column to columnar"};
     return convert_column_t_to_columnar(ret, plan, ret_types); 
 }
 void* build_context() {
