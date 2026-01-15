@@ -4,12 +4,17 @@
 #include <cstdlib>
 #include <vector>
 #include <stdexcept>
+#include <list>
 #include <iostream>
 #include <mutex>
 
 #define LARGE_CHUNK_SIZE (1024 * 1024) /* Allocate in chunks of 1MB */
 #define SMALL_CHUNK_SIZE (64 * 1024)   /* Allocate small chunks of 64KB */
-
+struct Chunk
+    {
+        char *begin; /* Start of small chunk */
+        char *end;   /* End of written tuples */
+    };
 /* LEVEL 1: The GlobalAllocator allocates large chunks of memory and manages them efficiently */
 class GlobalAllocator
 {
@@ -82,13 +87,9 @@ class TupleAllocator
 private:
     ThreadAllocator &thread_allocator_; /* Reference to the thread allocator */
 
-    struct Chunk
-    {
-        char *begin; /* Start of small chunk */
-        char *end;   /* End of written tuples */
-    };
+    
 
-    std::vector<Chunk> chunks_; /* All chunks owned by this allocator */
+    std::list<Chunk> chunks_; /* All chunks owned by this allocator */
 
     char *current_chunk_;   /* Current small chunk */
     size_t current_offset_; /* Offset inside the small chunk */
@@ -147,6 +148,12 @@ public:
             }
         }
     }
+    void connect_list(std::list<Chunk>& whole_list){
+        if(chunks_.empty()) return;
+        whole_list.splice(whole_list.end(), chunks_);
+    }
 };
 
 #endif // SLAB_ALLOCATOR_H
+
+

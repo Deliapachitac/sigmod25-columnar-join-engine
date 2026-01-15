@@ -40,8 +40,22 @@ namespace Contest
                 // Extract keys from left table and add to hash table
                 extract_keys_from_column_parallel(hash_table, left[left_col]);
 
-                hash_table.finalize_build();
+                hash_table.prepare_build();
 
+                std::vector<std::thread> threads;
+
+                threads.reserve(8);
+
+                 for (size_t tid = 0; tid < 8; ++tid){
+                     threads.emplace_back([&, tid]()
+                        {
+                            for(size_t partition = tid; partition < 8; partition+= 8) // Implement work stealing here
+                                hash_table.post_process_build(tid, partition);
+                        });
+                }
+            
+                for(auto& t : threads) t.join();
+                hash_table.finalize_build();
                 // in the probe phase we use the hash table to find matches from the right table
                 probe_phase(hash_table, left, right, true);
             }
@@ -51,8 +65,22 @@ namespace Contest
                 // Extract keys from right table and add to hash table
                 extract_keys_from_column_parallel(hash_table, right[right_col]);
 
-                hash_table.finalize_build();
+                hash_table.prepare_build();
 
+                std::vector<std::thread> threads;
+
+                threads.reserve(8);
+
+                for (size_t tid = 0; tid < 8; ++tid){
+                     threads.emplace_back([&, tid]()
+                        {
+                            for(size_t partition = tid; partition < 8; partition+= 8)
+                                hash_table.post_process_build(tid, partition);
+                        });
+                }
+
+                for(auto& t : threads) t.join();
+                hash_table.finalize_build();
                 // in the probe phase we use the hash table to find matches from the left table
                 probe_phase(hash_table, left, right, false);
             }

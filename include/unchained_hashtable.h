@@ -49,8 +49,14 @@ private:
     /* Directory size (power of 2) */
     size_t directory_size;
 
+    /* Array holding the tuples processed up until this partition */
+    size_t* previous_counts;
+
     /* How many bits to shift hash >> shift to get slot index */
     uint64_t shift;
+
+    /* Flag indicating if the hashtable has been prepared for finalizing the build */
+    bool prepared = false;
 
     /* Final contiguous tuple storage */
     Tuple *array = nullptr;
@@ -85,6 +91,10 @@ private:
         return !(tags[(uint32_t)hash >> (32 - 11)] & ~filter);
     }
 
+    inline uint16_t compute_tag(const uint64_t hash) const{
+        return tags[(uint32_t)hash >> (32 - 11)];
+    }
+
     /* Hash function (crc32) */
     uint64_t hash_key(int32_t key) const;
 
@@ -99,8 +109,11 @@ public:
     void build_insert(int32_t key, size_t value, size_t thread_id);
 
     /* Finalize: build directory + pack tuples into contiguous array */
-    void finalize_build();
+    bool prepare_build();
 
+    void post_process_build(size_t tid, size_t partition);
+
+    void finalize_build();
     /* Probe: return vector of matching values for a key */
     std::vector<size_t> probe(int32_t key) const;
 

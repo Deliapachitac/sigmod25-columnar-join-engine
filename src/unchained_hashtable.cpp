@@ -6,6 +6,7 @@
 #include <immintrin.h> /* for _mm_crc32_u32, _mm_crc32_u64 */
 #include <algorithm>
 #include <random>
+#include <list>
 #include <bitset>
 
 /* Constructor */
@@ -17,7 +18,7 @@ unchained_ht::unchained_ht()
     /* Initialize the number of threads and partitions */
     num_threads = 8;
     num_partitions = 8;
-
+    previous_counts = new size_t[num_partitions]{};
     thread_states.reserve(num_threads);
 
     /* Set up the per-thread build states */
@@ -96,23 +97,24 @@ void unchained_ht::build_insert(int32_t key, size_t value, size_t thread_id)
     *t = {key, hash, value};
     pb.count++;
 }
-
-/* Finalize the build, to get ready to probe */
-void unchained_ht::finalize_build()
+/* We prepare the hashtable to be finalized. This part needs to happen by one thread and that is why we have seperated the 2 functions*/
+bool unchained_ht::prepare_build()
 {
     /* If the table is already built, ignore */
     if (isBuilt)
-        return;
-
+        return false;
+    // We also save the tuple count before each partition. This is needed to correctly identify the index within the final array of each thread
     /* Check the number of tuples,  */
     tuple_count = 0;
     for (size_t t = 0; t < num_threads; ++t)
-        for (size_t p = 0; p < num_partitions; ++p)
+        for (size_t p = 0; p < num_partitions; ++p){
+            previous_counts[p] += tuple_count;
             tuple_count += thread_states[t].partitions[p].count;
+        }
     if (tuple_count == 0)
     {
         isBuilt = true;
-        return;
+        return false;
     }
 
     /* Allocate the directory */
@@ -132,34 +134,48 @@ void unchained_ht::finalize_build()
     /* Allocate final contiguous storage */
     array = new Tuple[tuple_count];
 
+    prepared = true;
+
+    return true;
+}
+
+void unchained_ht::post_process_build(size_t tid, size_t partition){
+    if(isBuilt) return;
+    if(!prepared) throw std::runtime_error("Hashtable was not prepared for build!");
+    size_t prev_count = previous_counts[partition];
+    size_t tuple_size = sizeof(Tuple);
+    /* We combine the partition tuples of all threads to 1 linked list, this is done so each thread processes its own partition without the need of synchronization */
+    std::list<Chunk> connected_chunks{};
+    for(size_t t = 0; t < num_threads; t++){
+        thread_states[t].partitions[partition].allocator.connect_list(connected_chunks);
+    }
+
     /* Step 1. Count tuples per slot and build Bloom filters */
-    for (size_t p = 0; p < num_partitions; ++p)
-    {
-        for (size_t t = 0; t < num_threads; ++t)
+
+    for(Chunk chunk : connected_chunks){
+        const char *cur = chunk.begin;
+        const char *end = chunk.end;
+        while (cur < end)
         {
-            PartitionBuffer &pb = thread_states[t].partitions[p];
+            const Tuple& tup = *reinterpret_cast<const Tuple*>(cur);
+            uint64_t slot = tup.hash >> shift;
+            directory[slot] += (1ULL << 16);
 
-            pb.allocator.for_each_tuple([&](const char *ptr)
-                                        {
-    const Tuple& tup = *reinterpret_cast<const Tuple*>(ptr);
-
-    uint64_t slot = tup.hash >> shift;
-
-    uint64_t count = (directory[slot] >> 16) + 1;
-    uint16_t bloom =
-        static_cast<uint16_t>(directory[slot]) |
-        tags[(uint32_t)tup.hash >> (32 - 11)];
-
-    directory[slot] = (count << 16) | bloom; });
-        }
+            directory[slot] |= compute_tag(tup.hash);
+            cur += tuple_size;
+        } 
     }
 
     /* Step 2. Exclusive prefix sum over counts to get starting indices */
-    size_t running = 0;
-    for (size_t i = 0; i < directory_size; i++)
+    size_t running = prev_count;
+    size_t k = 64 - shift;
+    size_t start = (partition << k) / num_partitions;
+    size_t end = ((partition + 1) << k) / num_partitions;
+
+    for (size_t i = start; i < end; i++)
     {
         uint64_t count = directory[i] >> 16;                  /* number of tuples in this slot */
-        uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */
+        uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */ 
 
         directory[i] = (running << 16) | bloom; /* store start index */
         running += count;                       /* update running total */
@@ -169,29 +185,28 @@ void unchained_ht::finalize_build()
     directory[-1] = 0;
 
     /* Step 3. Scatter tuples into their final positions, updating ends */
-    for (size_t p = 0; p < num_partitions; ++p)
-    {
-        for (size_t t = 0; t < num_threads; ++t)
+
+    for(Chunk chunk : connected_chunks){
+        const char *cur = chunk.begin;
+        const char *end = chunk.end;
+        while (cur < end)
         {
-            PartitionBuffer &pb = thread_states[t].partitions[p];
+            const Tuple& tup = *reinterpret_cast<const Tuple*>(cur);
 
-            pb.allocator.for_each_tuple([&](const char *ptr)
-                                        {
-    const Tuple& tup = *reinterpret_cast<const Tuple*>(ptr);
+            uint64_t slot = tup.hash >> shift;
+            uint64_t pos  = directory[slot] >> 16;
 
-    uint64_t slot = tup.hash >> shift;
-    uint64_t pos  = directory[slot] >> 16;
+            array[pos] = tup;
 
-    array[pos] = tup;
-
-    uint16_t bloom = static_cast<uint16_t>(directory[slot]);
-    directory[slot] = ((pos + 1) << 16) | bloom; });
-        }
+            directory[slot] += (1ULL << 16);
+            cur += tuple_size;
+        } 
     }
 
+}
+void unchained_ht::finalize_build(){
     isBuilt = true;
 }
-
 /* Probe function, returns vector of matching values */
 std::vector<size_t>
 unchained_ht::probe(int32_t key) const
