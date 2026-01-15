@@ -101,18 +101,28 @@ void unchained_ht::build_insert(int32_t key, size_t value, size_t thread_id)
 bool unchained_ht::prepare_build()
 {
     /* If the table is already built, ignore */
-    if (isBuilt)
-        return false;
-    // We also save the tuple count before each partition. This is needed to correctly identify the index within the final array of each thread
-    /* Check the number of tuples,  */
-    tuple_count = 0;
-    for (size_t t = 0; t < num_threads; ++t)
-        for (size_t p = 0; p < num_partitions; ++p){
-            previous_counts[p] += tuple_count;
-            tuple_count += thread_states[t].partitions[p].count;
+   if (isBuilt) return false;
+
+    // 1. Reset counts
+    std::memset(previous_counts, 0, sizeof(size_t) * num_partitions);
+    std::vector<size_t> partition_totals(num_partitions, 0);
+
+    // 2. Aggregate counts across threads
+    for (size_t t = 0; t < num_threads; ++t) {
+        for (size_t p = 0; p < num_partitions; ++p) {
+            partition_totals[p] += thread_states[t].partitions[p].count;
         }
-    if (tuple_count == 0)
-    {
+    }
+
+    // 3. Prefix sum for global array offsets
+    size_t total = 0;
+    for (size_t p = 0; p < num_partitions; ++p) {
+        previous_counts[p] = total;
+        total += partition_totals[p];
+    }
+    tuple_count = total;
+
+    if (tuple_count == 0) {
         isBuilt = true;
         return false;
     }
@@ -182,7 +192,7 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
     }
 
     /* Start index for slot 0 is 0 */
-    directory[-1] = 0;
+    //directory[-1] = 0;
 
     /* Step 3. Scatter tuples into their final positions, updating ends */
 

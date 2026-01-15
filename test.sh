@@ -2,7 +2,7 @@
 echo "Starting the build and execution process for the tests..."
 
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -Wno-dev
-cmake --build build --target all_tests -j $(nproc)
+cmake --build build --target Integration_tests -j $(nproc)
 
 echo "Build completed successfully."
 echo ""
