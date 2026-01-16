@@ -56,7 +56,7 @@ namespace Contest
 
             for (auto &t : threads)
                 t.join();
-
+            //for(int p = 0; p < 8; p++) hash_table.post_process_build(0, p);
             // 3. Finalize and Probe
             hash_table.finalize_build();
             probe_phase(hash_table, left, right, build_left);

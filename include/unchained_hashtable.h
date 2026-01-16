@@ -105,6 +105,7 @@ public:
     /* Constructor for size */
     unchained_ht();
 
+    ~unchained_ht();
     /* Insert tuple during build (store in temporary buffer) */
     void build_insert(int32_t key, size_t value, size_t thread_id);
 

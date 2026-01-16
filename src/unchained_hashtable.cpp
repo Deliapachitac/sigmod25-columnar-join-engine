@@ -44,6 +44,12 @@ unchained_ht::unchained_ht()
     /* Set up the precomputed tags */
     init_tags();
 }
+unchained_ht::~unchained_ht(){
+    //std::cout << "~unchained_ht()" << std::endl;
+    delete[] previous_counts;
+    delete[] directory_raw;
+    delete[] array;
+}
 
 /* Initialize the precomputed tag matrix */
 void unchained_ht::init_tags()
@@ -110,6 +116,7 @@ bool unchained_ht::prepare_build()
     // 2. Aggregate counts across threads
     for (size_t t = 0; t < num_threads; ++t) {
         for (size_t p = 0; p < num_partitions; ++p) {
+           // std::cout << "Partition: " << p << " Count: " << thread_states[t].partitions[p].count << std::endl;
             partition_totals[p] += thread_states[t].partitions[p].count;
         }
     }
@@ -129,7 +136,7 @@ bool unchained_ht::prepare_build()
 
     /* Allocate the directory */
     directory_size = next_power_of_2(static_cast<size_t>(tuple_count / load_factor) + 1);
-
+    if(directory_size <= num_partitions) directory_size = next_power_of_2(num_partitions + 1);
     /* Calculate the shift */
     shift = 64 - __builtin_ctzll(directory_size);
 
@@ -150,6 +157,7 @@ bool unchained_ht::prepare_build()
 }
 
 void unchained_ht::post_process_build(size_t tid, size_t partition){
+    //if(partition == 0) std::cout << "Entering..." << std::endl;
     if(isBuilt) return;
     if(!prepared) throw std::runtime_error("Hashtable was not prepared for build!");
     size_t prev_count = previous_counts[partition];
@@ -169,7 +177,7 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
         {
             const Tuple& tup = *reinterpret_cast<const Tuple*>(cur);
             uint64_t slot = tup.hash >> shift;
-            if(tid == 0) std::cout << "TID: "<< tid<<" Partition " << partition <<" Processing hash: " << tup.hash<<" Processing key: " << tup.key<< " Processing key: " << tup.value<< " Processing slot: " << slot<< std::endl;
+            //if(tid == 0) std::cout << "TID: "<< tid<<" Partition " << partition <<" Processing hash: " << tup.hash<<" Processing key: " << tup.key<< " Processing key: " << tup.value<< " Processing slot: " << slot<< std::endl;
             directory[slot] += (1ULL << 16);
 
             directory[slot] |= compute_tag(tup.hash);
@@ -182,13 +190,13 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
     size_t k = 64 - shift;
     size_t start = (partition << k) / num_partitions;
     size_t end = ((partition + 1) << k) / num_partitions;
-    if(tid == 0) std::cout << "tid " << tid << " Start " << start << " End " << end <<" k " << k<< " num_partitions " << num_partitions<< " Partition " << partition<< std::endl;
+    //if(tid == 0) std::cout << "tid " << tid << " Start " << start << " End " << end <<" k " << k<< " num_partitions " << num_partitions<< " Partition " << partition<< std::endl;
     for (size_t i = start; i < end; i++)
     {
        
         uint64_t count = directory[i] >> 16;                  /* number of tuples in this slot */
         uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */ 
-        if(tid == 0) std::cout << "Partition " << partition <<" Processing index: " <<  i << " Count = " << count<<" Running = " << running<<std::endl;
+        //std::cout << "Partition " << partition <<" Processing index: " <<  i << " Count = " << count<<" Running = " << running<<std::endl;
         directory[i] = (running << 16) | bloom; /* store start index */
         running += count;                       /* update running total */ 
     }
