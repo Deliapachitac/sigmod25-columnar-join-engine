@@ -43,14 +43,15 @@ namespace Contest
             }
 
             // 1. MUST happen on the main thread after extraction threads are joined
-            if (!hash_table.prepare_build())
-                return;
+            if (hash_table.prepare_build()){
+
             // 2. Spawn workers.
             std::vector<std::thread> threads;
-            threads.reserve(8);
-            for (size_t i = 0; i < 8; ++i)
+            threads.reserve(4);
+            for (size_t i = 0; i < 4; ++i)
             {
                 // Pass pointers/values explicitly to ensure thread safety
+                //for(size_t part = i; part < 64 ; part += 16)
                 threads.emplace_back(&unchained_ht::post_process_build, &hash_table, i, i);
             }
 
@@ -59,6 +60,7 @@ namespace Contest
             //for(int p = 0; p < 8; p++) hash_table.post_process_build(0, p);
             // 3. Finalize and Probe
             hash_table.finalize_build();
+            }
             probe_phase(hash_table, left, right, build_left);
         }
 
@@ -75,7 +77,7 @@ namespace Contest
                 page_offsets[i] = total;
                 total += *reinterpret_cast<uint16_t *>(column.pages[i]->data);
             }
-            const size_t num_threads = 8;
+            const size_t num_threads = 4;
             const size_t num_pages = column.pages.size();
 
             /* Launch threads to process pages in parallel */
