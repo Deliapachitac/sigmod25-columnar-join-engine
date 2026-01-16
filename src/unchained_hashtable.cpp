@@ -153,7 +153,7 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
     if(isBuilt) return;
     if(!prepared) throw std::runtime_error("Hashtable was not prepared for build!");
     size_t prev_count = previous_counts[partition];
-    size_t tuple_size = sizeof(Tuple);
+    size_t tuple_size = thread_states[0].partitions[0].allocator.get_tuple_size();
     /* We combine the partition tuples of all threads to 1 linked list, this is done so each thread processes its own partition without the need of synchronization */
     std::list<Chunk> connected_chunks{};
     for(size_t t = 0; t < num_threads; t++){
@@ -169,6 +169,7 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
         {
             const Tuple& tup = *reinterpret_cast<const Tuple*>(cur);
             uint64_t slot = tup.hash >> shift;
+            if(tid == 0) std::cout << "TID: "<< tid<<" Partition " << partition <<" Processing hash: " << tup.hash<<" Processing key: " << tup.key<< " Processing key: " << tup.value<< " Processing slot: " << slot<< std::endl;
             directory[slot] += (1ULL << 16);
 
             directory[slot] |= compute_tag(tup.hash);
@@ -181,14 +182,15 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
     size_t k = 64 - shift;
     size_t start = (partition << k) / num_partitions;
     size_t end = ((partition + 1) << k) / num_partitions;
-
+    if(tid == 0) std::cout << "tid " << tid << " Start " << start << " End " << end <<" k " << k<< " num_partitions " << num_partitions<< " Partition " << partition<< std::endl;
     for (size_t i = start; i < end; i++)
     {
+       
         uint64_t count = directory[i] >> 16;                  /* number of tuples in this slot */
         uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */ 
-
+        if(tid == 0) std::cout << "Partition " << partition <<" Processing index: " <<  i << " Count = " << count<<" Running = " << running<<std::endl;
         directory[i] = (running << 16) | bloom; /* store start index */
-        running += count;                       /* update running total */
+        running += count;                       /* update running total */ 
     }
 
     /* Start index for slot 0 is 0 */

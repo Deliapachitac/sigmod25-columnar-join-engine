@@ -31,59 +31,35 @@ namespace Contest
 
         auto run()
         {
-            namespace views = ranges::views;
-
             HashTable hash_table;
 
             if (build_left)
             {
-                // Extract keys from left table and add to hash table
                 extract_keys_from_column_parallel(hash_table, left[left_col]);
-
-                hash_table.prepare_build();
-
-                std::vector<std::thread> threads;
-
-                threads.reserve(8);
-
-                 for (size_t tid = 0; tid < 8; ++tid){
-                     threads.emplace_back([&, tid]()
-                        {
-                            for(size_t partition = tid; partition < 8; partition+= 8) // Implement work stealing here
-                                hash_table.post_process_build(tid, partition);
-                        });
-                }
-            
-                for(auto& t : threads) t.join();
-                hash_table.finalize_build();
-                // in the probe phase we use the hash table to find matches from the right table
-                probe_phase(hash_table, left, right, true);
             }
             else
             {
-
-                // Extract keys from right table and add to hash table
                 extract_keys_from_column_parallel(hash_table, right[right_col]);
-
-                hash_table.prepare_build();
-
-                std::vector<std::thread> threads;
-
-                threads.reserve(8);
-
-                for (size_t tid = 0; tid < 8; ++tid){
-                     threads.emplace_back([&, tid]()
-                        {
-                            for(size_t partition = tid; partition < 8; partition+= 8)
-                                hash_table.post_process_build(tid, partition);
-                        });
-                }
-
-                for(auto& t : threads) t.join();
-                hash_table.finalize_build();
-                // in the probe phase we use the hash table to find matches from the left table
-                probe_phase(hash_table, left, right, false);
             }
+
+            // 1. MUST happen on the main thread after extraction threads are joined
+            if (!hash_table.prepare_build())
+                return;
+            // 2. Spawn workers.
+            std::vector<std::thread> threads;
+            threads.reserve(8);
+            for (size_t i = 0; i < 8; ++i)
+            {
+                // Pass pointers/values explicitly to ensure thread safety
+                threads.emplace_back(&unchained_ht::post_process_build, &hash_table, i, i);
+            }
+
+            for (auto &t : threads)
+                t.join();
+
+            // 3. Finalize and Probe
+            hash_table.finalize_build();
+            probe_phase(hash_table, left, right, build_left);
         }
 
     private:
@@ -101,7 +77,7 @@ namespace Contest
             }
             const size_t num_threads = 8;
             const size_t num_pages = column.pages.size();
-            
+
             /* Launch threads to process pages in parallel */
             std::vector<std::thread> threads;
 

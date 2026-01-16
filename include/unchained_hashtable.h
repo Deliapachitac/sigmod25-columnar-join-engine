@@ -12,7 +12,7 @@ class unchained_ht
 {
 private:
     /* Tuple Layout, for the contiguous array */
-    struct Tuple
+    struct alignas(16) Tuple
     {
         int32_t key;
         uint64_t hash; /* Full hash to save time on rehashing */

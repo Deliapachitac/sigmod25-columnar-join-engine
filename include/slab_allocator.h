@@ -152,6 +152,9 @@ public:
         if(chunks_.empty()) return;
         whole_list.splice(whole_list.end(), chunks_);
     }
+    size_t get_tuple_size(){
+        return tuple_size_;
+    }
 };
 
 #endif // SLAB_ALLOCATOR_H
