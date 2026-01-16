@@ -273,19 +273,19 @@ namespace Contest
             threads.reserve(threadNum);
             for(size_t tid = 0; tid < threadNum; ++tid)
             {
-                 threads.emplace_back([&, tid]()
-                                     {
+                threads.emplace_back([&, tid]()
+                {
             row_counts[tid] = 0;
             // We use a round-robin approach to the thread work                                
-            for (int i = tid; i < probe_col.pages.size(); i+= threadNum)
+            for (int page_idx = tid; page_idx < probe_col.pages.size(); page_idx += threadNum)
             {
                 // For each page of the second column (the probe  side) we extract the number of rows and then the value_t entries . We save save the references to variables
-                auto* page = probe_col.pages[i];
+                auto* page = probe_col.pages[page_idx];
                 uint16_t num_rows = *reinterpret_cast<uint16_t *>(page->data);
 
                 value_t *value_buffer = nullptr;
                 int32_t *int_buffer = nullptr;
-
+                
                 // If the col contains int32 entries with null values   we are maintaining the same logic as before
                 if (probe_col.valid)
                 {
@@ -296,19 +296,19 @@ namespace Contest
                     // This column contains only int32 entries without null values we directly get the int32 buffer
                     int_buffer = reinterpret_cast<int32_t *>(page->data + 4);
                 }
-
+                const std::vector<size_t>& current_col_prefixes = is_left ? right_prefixes[right_col] : left_prefixes[left_col];
+                
                 for (uint16_t i = 0; i < num_rows; i++)
                 {
-
                     int32_t key;
-
+                    size_t local_probe_row_idx = current_col_prefixes[page_idx] + i; 
                     if (probe_col.valid)
                     {
                         const value_t &record = value_buffer[i];
                         // If the value is null we skip it
                         if (record.data_idx == 0xFFFF)
                         {
-                            probe_row_idx++;
+                            local_probe_row_idx++;
                             continue;
                         }
 
@@ -346,7 +346,7 @@ namespace Contest
                                     }
                                     else
                                     {
-                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], probe_row_idx);
+                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], local_probe_row_idx);
                                     }
 
                                     // If we are building from the right table and probing from the left table
@@ -357,7 +357,7 @@ namespace Contest
                                     // If src_col_idx is in range [0,left.size] we get the value from the left table
                                     if (src_col_idx < left.size())
                                     {
-                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], probe_row_idx);
+                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], local_probe_row_idx);
 
                                         // Else  we get the value from the right table
                                     }
@@ -372,7 +372,7 @@ namespace Contest
                             row_counts[tid]++;
                         }
                     }
-                    probe_row_idx++;
+                    local_probe_row_idx++;
                 }
             }});
         }   
