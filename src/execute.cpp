@@ -275,11 +275,10 @@ namespace Contest
             {
                  threads.emplace_back([&, tid]()
                                      {
-            row_counts[tid] = 0;                           
-            for (int i = 0; i < probe_col.pages.size(); i++)
+            row_counts[tid] = 0;
+            // We use a round-robin approach to the thread work                                
+            for (int i = tid; i < probe_col.pages.size(); i+= threadNum)
             {
-                // We use a round-robin approach to the thread work
-                if(i % threadNum  != tid) continue;            
                 // For each page of the second column (the probe  side) we extract the number of rows and then the value_t entries . We save save the references to variables
                 auto* page = probe_col.pages[i];
                 uint16_t num_rows = *reinterpret_cast<uint16_t *>(page->data);
