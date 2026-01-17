@@ -38,6 +38,11 @@ namespace Contest
         }
     };
 #endif
+namespace Contest
+{
+
+    using ExecuteResult = std::vector<column_t>;
+
     ExecuteResult execute_impl(const Plan &plan, size_t node_idx);
 
     struct JoinAlgorithm
@@ -143,6 +148,7 @@ namespace Contest
                         row_idx++;
                     }
                 }
+            } });
             }
         }
 
@@ -403,9 +409,6 @@ namespace Contest
     {
         auto table_id = scan.base_table_id;
         auto &input = plan.inputs[table_id];
-#ifdef TIMING
-        Timer time{"Scan"};
-#endif
         return scan_column_table(input, output_attrs, table_id);
     }
 
@@ -435,9 +438,6 @@ namespace Contest
         auto ret_types = plan.nodes[plan.root].output_attrs | views::transform([](const auto &v)
                                                                                { return std::get<1>(v); }) |
                          ranges::to<std::vector<DataType>>();
-#ifdef TIMING
-        Timer time{"Convert from column to columnar"};
-#endif
         return convert_column_t_to_columnar(ret, plan, ret_types);
     }
     void *build_context()
