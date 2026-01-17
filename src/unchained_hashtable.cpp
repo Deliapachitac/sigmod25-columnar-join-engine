@@ -17,12 +17,9 @@ unchained_ht::unchained_ht(): directory_raw(nullptr), array(nullptr), directory(
     tuple_count = 0;
 
     /* Initialize the number of threads and partitions */
-    num_threads = std::thread::hardware_concurrency();
-    num_partitions = std::thread::hardware_concurrency();
-    if(num_threads == 0){
-        num_threads = 8;
-        num_partitions = 8;
-    }
+    num_threads = 8;
+    num_partitions = 8;
+    
     previous_counts = new size_t[num_partitions]{};
     thread_states.reserve(num_threads);
 
