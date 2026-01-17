@@ -51,57 +51,36 @@ namespace Contest
 
         auto run()
         {
-            namespace views = ranges::views;
-
             HashTable hash_table;
 
             if (build_left)
             {
-                {
-#ifdef TIMING
-                    Timer time{"Extract keys"};
-#endif
-                    // Extract keys from left table and add to hash table
-                    extract_keys_from_column(hash_table, left[left_col]);
-                }
-                {
-#ifdef TIMING
-                    Timer time{"Finalize build"};
-#endif
-                    hash_table.finalize_build();
-                }
-                {
-#ifdef TIMING
-                    Timer time{"Probe"};
-#endif
-                    // in the probe phase we use the hash table to find matches from the right table
-                    probe_phase(hash_table, left, right, true);
-                }
+                extract_keys_from_column(hash_table, left[left_col]);
             }
             else
             {
-                {
-#ifdef TIMING
-                    Timer time{"Extract keys"};
-#endif
-                    // Extract keys from right table and add to hash table
-                    extract_keys_from_column(hash_table, right[right_col]);
-                }
-                {
-#ifdef TIMING
-                    Timer time{"Finalize build"};
-#endif
-                    hash_table.finalize_build();
-                }
-
-                // in the probe phase we use the hash table to find matches from the right table
-                {
-#ifdef TIMING
-                    Timer time{"Probe"};
-#endif
-                    probe_phase(hash_table, left, right, false);
-                }
+                extract_keys_from_column(hash_table, right[right_col]);
             }
+
+            // 1. MUST happen on the main thread after extraction threads are joined
+            if (hash_table.prepare_build()){
+
+            // 2. Spawn workers.
+            std::vector<std::thread> threads;
+            threads.reserve(4);
+            for (size_t i = 0; i < 4; ++i)
+            {
+                // Pass pointers/values explicitly to ensure thread safety
+                //for(size_t part = i; part < 64 ; part += 16)
+                threads.emplace_back(&unchained_ht::post_process_build, &hash_table, i, i);
+            }
+
+            for (auto &t : threads)
+                t.join();
+            // 3. Finalize and Probe
+            hash_table.finalize_build();
+            }
+            probe_phase(hash_table, left, right, build_left);
         }
 
     private:
