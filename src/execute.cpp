@@ -69,7 +69,7 @@ using HashTable = unchained_ht;
                 // 1. MUST happen on the main thread after extraction threads are joined
                 if (hash_table.prepare_build())
                 {
-                    size_t threadNum = std::thread::hardware_concurrency();
+                    size_t threadNum = 8;
                     if (threadNum == 0)
                         {
                             threadNum = 8;
@@ -105,7 +105,7 @@ using HashTable = unchained_ht;
                     page_offsets[i] = total;
                     total += *reinterpret_cast<uint16_t *>(column.pages[i]->data);
                 }
-                size_t threadNum = std::thread::hardware_concurrency();
+                size_t threadNum = 8;
                 if (threadNum == 0)
                 {
                     threadNum = 8;
@@ -277,7 +277,7 @@ using HashTable = unchained_ht;
 
                 std::vector<std::thread> threads;
 
-                size_t threadNum = std::thread::hardware_concurrency();
+                size_t threadNum = 16;
 
                 if (threadNum == 0)
                 {
