@@ -9,10 +9,35 @@
 #include <cstdlib>
 #include <algorithm>
 #include <unchained_hashtable.h>
+#include <chrono>
 #include <thread>
 
+#define TIMING
+#undef TIMING
 using HashTable = unchained_ht;
+namespace Contest
+{
 
+    using ExecuteResult = std::vector<column_t>;
+#ifdef TIMING
+    struct Timer
+    {
+        std::chrono::time_point<std::chrono::high_resolution_clock> start;
+        std::string tag;
+
+        Timer(std::string task) : tag(task)
+        {
+            start = std::chrono::high_resolution_clock::now();
+        }
+
+        ~Timer()
+        {
+            auto end = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<float> duration = end - start;
+            std::cout << tag << " took: " << duration.count() * 1000.0f << "ms" << std::endl;
+        }
+    };
+#endif
 namespace Contest
 {
 
@@ -35,11 +60,11 @@ namespace Contest
 
             if (build_left)
             {
-                extract_keys_from_column_parallel(hash_table, left[left_col]);
+                extract_keys_from_column(hash_table, left[left_col]);
             }
             else
             {
-                extract_keys_from_column_parallel(hash_table, right[right_col]);
+                extract_keys_from_column(hash_table, right[right_col]);
             }
 
             // 1. MUST happen on the main thread after extraction threads are joined
@@ -57,7 +82,6 @@ namespace Contest
 
             for (auto &t : threads)
                 t.join();
-            //for(int p = 0; p < 8; p++) hash_table.post_process_build(0, p);
             // 3. Finalize and Probe
             hash_table.finalize_build();
             }
@@ -65,71 +89,67 @@ namespace Contest
         }
 
     private:
-        void extract_keys_from_column_parallel(HashTable &hash_table, column_t &column)
+        void extract_keys_from_column(HashTable &hash_table, column_t &column)
         {
-            /* Precompute page row offsets (single-threaded, safe) */
-            std::vector<size_t> page_offsets(column.pages.size());
 
-            /*  Compute starting row index for each page */
-            size_t total = 0;
-            for (size_t i = 0; i < column.pages.size(); ++i)
+            // for every page in the column we exctract the key and insert it into the hash table
+            size_t row_idx = 0;
+
+            // If the column contains int32 entries with null values so we are maintaining the same logic as before
+            if (column.valid)
             {
-                page_offsets[i] = total;
-                total += *reinterpret_cast<uint16_t *>(column.pages[i]->data);
+                for (auto *page : column.pages)
+                {
+
+                    // The page contains a number of rows and then the value_t entries . We save save the references to variables
+                    uint16_t num_rows = *reinterpret_cast<uint16_t *>(page->data);
+                    auto *buffer = reinterpret_cast<value_t *>(page->data + sizeof(uint16_t));
+
+                    // for each value_t entry wecheck  if it is null or int and insert in the hash table
+                    for (uint16_t i = 0; i < num_rows; i++)
+                    {
+                        const value_t &record = buffer[i];
+                        if (record.data_idx == 0xFFFF)
+                        {
+                            row_idx++;
+                            continue;
+                        }
+
+                        int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) | (int32_t(record.table_idx) & 0xFFFF);
+
+                        // If key already exists  we insert the row index in the vector of the row indexes
+                        // else we create a new entry
+                        if (key >= 0)
+                        {
+                            hash_table.build_insert(key, row_idx);
+                            row_idx++;
+                        }
+                        else
+                        {
+                            throw std::runtime_error("wrong type of field");
+                        }
+                    }
+                }
             }
-            const size_t num_threads = 4;
-            const size_t num_pages = column.pages.size();
-
-            /* Launch threads to process pages in parallel */
-            std::vector<std::thread> threads;
-
-            threads.reserve(num_threads);
-
-            for (size_t tid = 0; tid < num_threads; ++tid)
+            else
             {
-                threads.emplace_back([&, tid]()
-                                     {
+                // if the column contains only int32 entries without null values
+                for (auto *page : column.pages)
+                {
 
-            /* Each thread processes pages in round-robin fashion */
-            for (size_t page_idx = tid; page_idx < num_pages; page_idx += num_threads) {
+                    // The page contains a number of rows and then the int32_t entries . We save save the references to variables
+                    auto num_rows = *reinterpret_cast<uint16_t *>(page->data);
+                    auto *buffer = reinterpret_cast<int32_t *>(page->data + 4);
 
-                auto* page = column.pages[page_idx];
-
-                uint16_t num_rows =
-                    *reinterpret_cast<uint16_t*>(page->data);
-
-                auto* buffer =
-                    reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
-
-                /* Compute base row index for this page */
-                size_t row_idx = page_offsets[page_idx];
-
-                for (uint16_t i = 0; i < num_rows; i++) {
-
-                    const value_t& record = buffer[i];
-
-                    if (record.data_idx == 0xFFFF) {
+                    for (uint16_t i = 0; i < num_rows; i++)
+                    {
+                        int32_t key = buffer[i];
+                        hash_table.build_insert(key, row_idx);
                         row_idx++;
-                        continue;
                     }
-
-                    int32_t key =
-                        ((int32_t(record.column_idx) & 0xFFFF) << 16) |
-                        (int32_t(record.table_idx)  & 0xFFFF);
-
-                    if (key >= 0) {
-                        hash_table.build_insert(key, row_idx, tid);
-                    } else {
-                        throw std::runtime_error("wrong type of field");
-                    }
-
-                    row_idx++;
                 }
             } });
             }
-
-            for (auto &t : threads)
-                t.join();
         }
 
         std::vector<size_t> build_prefix(const column_t &col)
@@ -169,8 +189,25 @@ namespace Contest
             // Get the pointer to the page and where the value_t entries begin
             //  and return the value_t entry at the  index we calculated earlier
             auto *page = col.pages[page_idx];
-            auto *buf = reinterpret_cast<value_t *>(page->data + sizeof(uint16_t));
-            return buf[local_idx];
+
+            // If the column contains int32 entries with null values so we are maintaining the same logic as before
+            if (col.valid)
+            {
+                auto *buf = reinterpret_cast<value_t *>(page->data + sizeof(uint16_t));
+                return buf[local_idx];
+            }
+            else
+            {
+                // This column contains only int32 entries without null values
+                auto *data_begin = reinterpret_cast<int32_t *>(page->data + 4);
+                int32_t value = data_begin[local_idx];
+                return value_t{
+                    .table_idx = static_cast<uint16_t>(value & 0xFFFF),
+                    .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
+                    .page_idx = 0,
+                    .data_idx = 0xFFFE // INT_VALUE marker
+                };
+            }
         }
 
         void probe_phase(HashTable &hash_table, ExecuteResult &left, ExecuteResult &right, bool is_left)
@@ -205,23 +242,67 @@ namespace Contest
             column_t &probe_col = is_left ? right[right_col] : left[left_col];
             size_t probe_row_idx = 0;
 
-            // For each page of the second column (the probe  side)we excract the number of rows and then the value_t entries . We save save the references to variables
-            for (auto *page : probe_col.pages)
-            {
-                uint16_t num_rows = *reinterpret_cast<uint16_t *>(page->data);
-                auto *buffer = reinterpret_cast<value_t *>(page->data + sizeof(uint16_t));
+            std::vector<std::thread> threads;
+            
+            size_t threadNum = std::thread::hardware_concurrency();
 
+            if(threadNum == 0){
+                threadNum = 8;
+            }
+            // Only allocate memory for the temporary thread page vector if we are to use it
+            for (auto& col : results) {
+                col.prepare_for_threads(threadNum);
+            }   
+            // We collect the row count individually to avoid a race condition and then we add them all together
+            size_t row_counts[threadNum];
+            threads.reserve(threadNum);
+            for(size_t tid = 0; tid < threadNum; ++tid)
+            {
+                threads.emplace_back([&, tid]()
+                {
+            row_counts[tid] = 0;
+            // We use a round-robin approach to the thread work                                
+            for (int page_idx = tid; page_idx < probe_col.pages.size(); page_idx += threadNum)
+            {
+                // For each page of the second column (the probe  side) we extract the number of rows and then the value_t entries . We save save the references to variables
+                auto* page = probe_col.pages[page_idx];
+                uint16_t num_rows = *reinterpret_cast<uint16_t *>(page->data);
+
+                value_t *value_buffer = nullptr;
+                int32_t *int_buffer = nullptr;
+                
+                // If the col contains int32 entries with null values   we are maintaining the same logic as before
+                if (probe_col.valid)
+                {
+                    value_buffer = reinterpret_cast<value_t *>(page->data + sizeof(uint16_t));
+                }
+                else
+                {
+                    // This column contains only int32 entries without null values we directly get the int32 buffer
+                    int_buffer = reinterpret_cast<int32_t *>(page->data + 4);
+                }
+                const std::vector<size_t>& current_col_prefixes = is_left ? right_prefixes[right_col] : left_prefixes[left_col];
+                
                 for (uint16_t i = 0; i < num_rows; i++)
                 {
-                    const value_t &record = buffer[i];
-                    // If the value is null we skip it
-                    if (record.data_idx == 0xFFFF)
+                    int32_t key;
+                    size_t local_probe_row_idx = current_col_prefixes[page_idx] + i; 
+                    if (probe_col.valid)
                     {
-                        probe_row_idx++;
-                        continue;
-                    }
+                        const value_t &record = value_buffer[i];
+                        // If the value is null we skip it
+                        if (record.data_idx == 0xFFFF)
+                        {
+                            local_probe_row_idx++;
+                            continue;
+                        }
 
-                    int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) | (int32_t(record.table_idx) & 0xFFFF);
+                        key = ((int32_t(record.column_idx) & 0xFFFF) << 16) | (int32_t(record.table_idx) & 0xFFFF);
+                    }
+                    else
+                    {
+                        key = int_buffer[i];
+                    }
 
                     // After getting the key we check if it exists in the hash table or not, and get the vector of matching row indexes
                     auto matches = hash_table.probe(key);
@@ -250,7 +331,7 @@ namespace Contest
                                     }
                                     else
                                     {
-                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], probe_row_idx);
+                                        value_to_insert = get_value(right[src_col_idx - left.size()], right_prefixes[src_col_idx - left.size()], local_probe_row_idx);
                                     }
 
                                     // If we are building from the right table and probing from the left table
@@ -261,7 +342,7 @@ namespace Contest
                                     // If src_col_idx is in range [0,left.size] we get the value from the left table
                                     if (src_col_idx < left.size())
                                     {
-                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], probe_row_idx);
+                                        value_to_insert = get_value(left[src_col_idx], left_prefixes[src_col_idx], local_probe_row_idx);
 
                                         // Else  we get the value from the right table
                                     }
@@ -271,19 +352,26 @@ namespace Contest
                                     }
                                 }
 
-                                results[out_col_idx].insert_value_to_page(value_to_insert);
+                                results[out_col_idx].insert_value_to_page(value_to_insert, tid);
                             }
-                            results[0].num_rows++;
+                            row_counts[tid]++;
                         }
                     }
-                    probe_row_idx++;
+                    local_probe_row_idx++;
                 }
+            }});
+        }   
+            size_t total_rows = 0;
+            for (size_t tid = 0; tid < threadNum; tid++){
+                threads[tid].join();
+                total_rows += row_counts[tid];
             }
-
+                
             // We also need to set the num_rows for all the output columns
-            for (size_t i = 1; i < results.size(); ++i)
+            for (size_t i = 0; i < results.size(); ++i)
             {
-                results[i].num_rows = results[0].num_rows;
+                results[i].collect_vectors();
+                results[i].num_rows = total_rows;
             }
         }
     };
