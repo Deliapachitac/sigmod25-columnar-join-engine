@@ -389,72 +389,69 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
             auto& out_col = results[column_idx]; // save the output column where we will insert the converted data
             
             size_t row_idx = 0;
-            uint16_t page_idx = 0;
-            
-            //Iterate through all pages of the input column and convert data  accordingly      
-            for (auto* page:in_column.pages | views::transform([](auto* page) { return page->data; })) {
-                
-                switch (in_column.type) {
-                case DataType::INT32: {
+            uint16_t page_idx =0;
+            bool optimize =false;
 
-                    //First read the number of rows, data begin and bitmap from the page
-                    auto num_rows= *reinterpret_cast<uint16_t*>(page);
-                    auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
-                    auto* bitmap =reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
-                    uint16_t data_idx = 0;
+            //Here we check if the column is of type int32 and if there are no nulls in the column
+            if(in_column.type== DataType::INT32){
+                    
+                optimize = true;// set optimize to true 
+                for (auto* page_indx: in_column.pages) {
 
-                    //Then for each row we check if the data in null or not 
-                    //and insert it to the output column with the help function insert_value_to_page(implemented in struct column_t)
-                    for (uint16_t i = 0; i < num_rows; ++i) {
-
-                        if (helper::get_bitmap(bitmap, i)) {
-                            auto value = data_begin[data_idx++];
-            
-                            out_col.insert_value_to_page(value_t{
-                                .table_idx = static_cast<uint16_t>(value & 0xFFFF),
-                                .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
-                                .page_idx = page_idx,
-                                .data_idx = helper::INT_VALUE
-                            });
-                        } else {
-                            out_col.insert_value_to_page(value_t{
-                                .table_idx = 0,
-                                .column_idx = 0,
-                                .page_idx = page_idx,
-                                .data_idx = helper::NULL_VALUE
-                            });
-                        }
-                        ++row_idx;
-                    }
-                    break;
-                }
-                case DataType::VARCHAR: {
-
-                    //After we read the number of rows we check if it is a long string page (0xffff)
+                    //We read the first two bytes which contains the number of rows 
+                    //Also we read the next 2 bytes which contains the number of non nulls
+                    // If the numbers are not equal it means that some rows are nulls and we cannot optimize  
+                    auto* page = page_indx->data;
                     auto num_rows = *reinterpret_cast<uint16_t*>(page);
-                    if (num_rows == 0xffff) {
+                    auto num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
+                    if (num_rows != num_non_null) {
+                        optimize = false;
+                        break;
+                    }
+                }
+            }
 
-                        out_col.insert_value_to_page(value_t{
-                            .table_idx = static_cast<uint16_t>(table_id),
-                            .column_idx = static_cast<uint16_t>(in_col_idx),
-                            .page_idx = page_idx,
-                            .data_idx = 0
-                        });
-                        ++row_idx;
-                    } else if (num_rows != 0xfffe) {
 
-                        //If it is not a long string page we read the bitmap and insert the data accordingly
+            
+            //If the column is of type int32 and has no nulls we can optimize the copy process
+            if(optimize){
+                out_col.valid=false;
+
+                //For each page in the input column we directly push the page pointer to the output column
+                for (auto* page:in_column.pages ) { 
+                    out_col.pages.push_back(page); 
+                    auto num_rows= *reinterpret_cast<uint16_t*>(page->data);
+                    row_idx += num_rows;
+                   
+                }
+                out_col.num_rows = row_idx;
+            }else{
+            //For Varchar columns or int32 with nulls we copy as before 
+                //Iterate through all pages of the input column and convert data  accordingly      
+                for (auto* page:in_column.pages | views::transform([](auto* page) { return page->data; })) {
+                    
+                    switch (in_column.type) {
+                    case DataType::INT32: {
+
+                        //First read the number of rows, data begin and bitmap from the page
+                        auto num_rows= *reinterpret_cast<uint16_t*>(page);
+                        auto* data_begin = reinterpret_cast<int32_t*>(page + 4);
                         auto* bitmap =reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
                         uint16_t data_idx = 0;
+
+                        //Then for each row we check if the data in null or not 
+                        //and insert it to the output column with the help function insert_value_to_page(implemented in struct column_t)
                         for (uint16_t i = 0; i < num_rows; ++i) {
+
                             if (helper::get_bitmap(bitmap, i)) {
+                                auto value = data_begin[data_idx++];
+                
                                 out_col.insert_value_to_page(value_t{
-                                    .table_idx = static_cast<uint16_t>(table_id),
-                                    .column_idx = static_cast<uint16_t>(in_col_idx),
+                                    .table_idx = static_cast<uint16_t>(value & 0xFFFF),
+                                    .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
                                     .page_idx = page_idx,
-                                    .data_idx = data_idx
+                                    .data_idx = helper::INT_VALUE
                                 });
-                                ++data_idx;
                             } else {
                                 out_col.insert_value_to_page(value_t{
                                     .table_idx = 0,
@@ -465,13 +462,53 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                             }
                             ++row_idx;
                         }
+                        break;
                     }
-                    break;
+                    case DataType::VARCHAR: {
+
+                        //After we read the number of rows we check if it is a long string page (0xffff)
+                        auto num_rows = *reinterpret_cast<uint16_t*>(page);
+                        if (num_rows == 0xffff) {
+
+                            out_col.insert_value_to_page(value_t{
+                                .table_idx = static_cast<uint16_t>(table_id),
+                                .column_idx = static_cast<uint16_t>(in_col_idx),
+                                .page_idx = page_idx,
+                                .data_idx = 0
+                            });
+                            ++row_idx;
+                        } else if (num_rows != 0xfffe) {
+
+                            //If it is not a long string page we read the bitmap and insert the data accordingly
+                            auto* bitmap =reinterpret_cast<uint8_t*>(page + PAGE_SIZE - (num_rows + 7) / 8);
+                            uint16_t data_idx = 0;
+                            for (uint16_t i = 0; i < num_rows; ++i) {
+                                if (helper::get_bitmap(bitmap, i)) {
+                                    out_col.insert_value_to_page(value_t{
+                                        .table_idx = static_cast<uint16_t>(table_id),
+                                        .column_idx = static_cast<uint16_t>(in_col_idx),
+                                        .page_idx = page_idx,
+                                        .data_idx = data_idx
+                                    });
+                                    ++data_idx;
+                                } else {
+                                    out_col.insert_value_to_page(value_t{
+                                        .table_idx = 0,
+                                        .column_idx = 0,
+                                        .page_idx = page_idx,
+                                        .data_idx = helper::NULL_VALUE
+                                    });
+                                }
+                                ++row_idx;
+                            }
+                        }
+                        break;
+                    }
+                    }
+                    page_idx++; // we go to the next page
                 }
-                }
-                page_idx++; // we go to the next page
+                out_col.num_rows = row_idx;
             }
-            out_col.num_rows = row_idx;
         }
     };
     filter_tp.run(task, output_attrs.size());
@@ -507,21 +544,38 @@ ColumnarTable convert_column_t_to_columnar (
 
                 //Read number of rows and where the entries begin (value_t entries)
                 uint16_t num_rows = *reinterpret_cast<uint16_t*>(page->data);
-                auto* data_begin = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
                 
-                //For each value_t entry check if it is null or int and insert accordingly
-                for (uint16_t i = 0; i < num_rows; ++i) {
-                    const value_t& value = data_begin[i];
+
+                //If the pages contains int32 entries with null values 
+                //we keep the insertion process like before 
+                if (in_col.valid) {
+
+                    auto* data_begin = reinterpret_cast<value_t*>(page->data + sizeof(uint16_t));
                     
-                    if (value.data_idx == helper::NULL_VALUE) {
-                        inserter.insert_null();
-                    } else if (value.data_idx == helper::INT_VALUE) {
+                    //For each value_t entry check if it is null or int and insert accordingly
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        const value_t& value = data_begin[i];
                         
-                        int32_t combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |(int32_t(value.table_idx) & 0xFFFF);
-                        inserter.insert(combined_value);
-                    } else {
-                        throw std::runtime_error("Invalid data_idx for INT32 column");
+                        if (value.data_idx == helper::NULL_VALUE) {
+                            inserter.insert_null();
+                        } else if (value.data_idx == helper::INT_VALUE) {
+                            
+                            int32_t combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |(int32_t(value.table_idx) & 0xFFFF);
+                            inserter.insert(combined_value);
+                        } else {
+                            throw std::runtime_error("Invalid data_idx for INT32 column");
+                        }
                     }
+                }
+                else{
+                // If the pages contains only int32 entries without null values
+                //we insert directly the int32 values without checking for nulls
+                    auto* data_begin = reinterpret_cast<int32_t*>(page->data + 4);
+                    
+                    for (uint16_t i = 0; i < num_rows; ++i) {
+                        inserter.insert(data_begin[i]);
+                    }
+                    
                 }
             }
             inserter.finalize(); 

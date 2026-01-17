@@ -6,18 +6,40 @@
 #include <vector>
 #include <iostream>
 #include <cstring> /* for memset */
+#include <slab_allocator.h>
 
 class unchained_ht
 {
 private:
     /* Tuple Layout, for the contiguous array */
-    struct Tuple
+    struct alignas(16) Tuple
     {
-        int32_t  key;
-        uint64_t hash;  /* Full hash to save time on rehashing */
-        size_t   value;
+        int32_t key;
+        uint64_t hash; /* Full hash to save time on rehashing */
+        size_t value;
     };
 
+    /* Tuple data for each partition*/
+    struct PartitionBuffer
+    {
+        TupleAllocator allocator;
+        size_t count;
+    };
+
+    /* Per-thread partitions*/
+    struct ThreadBuildState
+    {
+        ThreadAllocator allocator;
+        std::vector<PartitionBuffer> partitions;
+    };
+
+    /* Parallel safe build buffers (temporary storage before finalization) */
+    GlobalAllocator global_allocator;
+    std::vector<ThreadBuildState> thread_states;
+    size_t num_threads;
+    size_t num_partitions;
+    
+    
     /* Build-state flag */
     bool isBuilt = false;
 
@@ -27,11 +49,14 @@ private:
     /* Directory size (power of 2) */
     size_t directory_size;
 
+    /* Array holding the tuples processed up until this partition */
+    size_t* previous_counts;
+
     /* How many bits to shift hash >> shift to get slot index */
     uint64_t shift;
 
-    /* Temporary buffer (before finalization) */
-    std::vector<Tuple> build_buffer;
+    /* Flag indicating if the hashtable has been prepared for finalizing the build */
+    bool prepared = false;
 
     /* Final contiguous tuple storage */
     Tuple *array = nullptr;
@@ -39,7 +64,7 @@ private:
 
     /* Directory storage */
     uint64_t *directory_raw = nullptr;
-    uint64_t *directory     = nullptr;
+    uint64_t *directory = nullptr;
 
     /* Precomputed tags used in Bloom filters (rounded to 2048) */
     uint16_t tags[2048];
@@ -66,6 +91,10 @@ private:
         return !(tags[(uint32_t)hash >> (32 - 11)] & ~filter);
     }
 
+    inline uint16_t compute_tag(const uint64_t hash) const{
+        return tags[(uint32_t)hash >> (32 - 11)];
+    }
+
     /* Hash function (crc32) */
     uint64_t hash_key(int32_t key) const;
 
@@ -76,20 +105,23 @@ public:
     /* Constructor for size */
     unchained_ht();
 
+    ~unchained_ht();
     /* Insert tuple during build (store in temporary buffer) */
-    void build_insert(int32_t key, size_t value);
+    void build_insert(int32_t key, size_t value, size_t thread_id);
 
     /* Finalize: build directory + pack tuples into contiguous array */
-    void finalize_build();
+    bool prepare_build();
 
+    void post_process_build(size_t tid, size_t partition);
+
+    void finalize_build();
     /* Probe: return vector of matching values for a key */
     std::vector<size_t> probe(int32_t key) const;
 
     /* Test functions for the hashtable */
     size_t get_directory_size() const { return directory_size; }
-    size_t get_tuple_count()   const { return tuple_count;    }
+    size_t get_tuple_count() const { return tuple_count; }
     bool built() const { return isBuilt; }
-    size_t get_build_buffer_size() const { return build_buffer.size(); }
 };
 
 #endif // UNCHAINED_HASHTABLE_H
