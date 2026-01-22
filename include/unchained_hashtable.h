@@ -66,8 +66,8 @@ private:
     uint64_t *directory_raw = nullptr;
     uint64_t *directory = nullptr;
 
-    /* Precomputed tags used in Bloom filters (rounded to 2048) */
-    uint16_t tags[2048];
+    /* Precomputed tags used in Bloom filters (rounded to 2048) - 8-bit for cache locality */
+    uint8_t tags[2048];
 
     /* --------- Helper: round size to next power of 2 --------- */
     static constexpr size_t next_power_of_2(size_t n)
@@ -85,13 +85,13 @@ private:
         return n + 1;
     }
 
-    /* Quick filter check (ANDN logic from paper) */
-    inline bool could_contain(uint16_t filter, uint64_t hash) const
+    /* Quick filter check (ANDN logic from paper) - 8-bit version */
+    inline bool could_contain(uint8_t filter, uint64_t hash) const
     {
         return !(tags[(uint32_t)hash >> (32 - 11)] & ~filter);
     }
 
-    inline uint16_t compute_tag(const uint64_t hash) const{
+    inline uint8_t compute_tag(const uint64_t hash) const{
         return tags[(uint32_t)hash >> (32 - 11)];
     }
 

@@ -55,15 +55,15 @@ unchained_ht::~unchained_ht(){
 /* Initialize the precomputed tag matrix */
 void unchained_ht::init_tags()
 {
-    /* Initialize the pattern vector */
-    std::vector<uint16_t> patterns;
-    patterns.reserve(1820);
+    /* Initialize the pattern vector for 8-bit Bloom filters */
+    std::vector<uint8_t> patterns;
+    patterns.reserve(256);
 
-    /* Set the masks */
-    for (int a = 0; a < 16; a++)
-        for (int b = a + 1; b < 16; b++)
-            for (int c = b + 1; c < 16; c++)
-                for (int d = c + 1; d < 16; d++)
+    /* Set the masks - all 8-bit patterns */
+    for (int a = 0; a < 8; a++)
+        for (int b = a + 1; b < 8; b++)
+            for (int c = b + 1; c < 8; c++)
+                for (int d = c + 1; d < 8; d++)
                     patterns.push_back((1u << a) | (1u << b) | (1u << c) | (1u << d));
 
     /* Suffle the patterns */
@@ -176,7 +176,7 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
         {
             const Tuple& tup = *reinterpret_cast<const Tuple*>(cur);
             uint64_t slot = tup.hash >> shift;
-            directory[slot] += (1ULL << 16);
+            directory[slot] += (1ULL << 8);
 
             directory[slot] |= compute_tag(tup.hash);
             cur += tuple_size;
@@ -191,10 +191,10 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
     for (size_t i = start; i < end; i++)
     {
        
-        uint64_t count = directory[i] >> 16;                  /* number of tuples in this slot */
-        uint16_t bloom = static_cast<uint16_t>(directory[i]); /* bloom filter */ 
+        uint64_t count = directory[i] >> 8;                  /* number of tuples in this slot */
+        uint8_t bloom = static_cast<uint8_t>(directory[i]); /* bloom filter */ 
         
-        directory[i] = (running << 16) | bloom; /* store start index */
+        directory[i] = (running << 8) | bloom; /* store start index */
         running += count;                       /* update running total */ 
     }
 
@@ -208,11 +208,11 @@ void unchained_ht::post_process_build(size_t tid, size_t partition){
             const Tuple& tup = *reinterpret_cast<const Tuple*>(cur);
 
             uint64_t slot = tup.hash >> shift;
-            uint64_t pos  = directory[slot] >> 16;
+            uint64_t pos  = directory[slot] >> 8;
 
             array[pos] = tup;
             
-            directory[slot] += (1ULL << 16);
+            directory[slot] += (1ULL << 8);
             cur += tuple_size;
         } 
     }
@@ -239,7 +239,7 @@ unchained_ht::probe(int32_t key) const
 
     /* Load directory entry */
     uint64_t entry = directory[slot];
-    uint16_t bloom = static_cast<uint16_t>(entry);
+    uint8_t bloom = static_cast<uint8_t>(entry);
 
     /* Bloom filter check, reject early if impossible match */
     if (!could_contain(bloom, h))
@@ -248,8 +248,8 @@ unchained_ht::probe(int32_t key) const
     }
 
     /* Range for this hash-prefix slot */
-    uint64_t start_off = directory[slot - 1] >> 16;
-    uint64_t end_off = directory[slot] >> 16;
+    uint64_t start_off = directory[slot - 1] >> 8;
+    uint64_t end_off = directory[slot] >> 8;
 
     /* Get pointers to the beginning and end of the range */
     const Tuple *begin = array + start_off;
