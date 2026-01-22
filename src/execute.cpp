@@ -134,13 +134,13 @@ namespace Contest
                 for (uint16_t i = 0; i < num_rows; i++)
                 {
                     const value_t &record = buffer[i];
-                    if (record.data_idx == 0xFFFF)
+                    if (record.data_idx() == 0xFFFF)
                     {
                         row_idx++;
                         continue;
                     }
 
-                    int32_t key = ((int32_t(record.column_idx) & 0xFFFF) << 16) | (int32_t(record.table_idx) & 0xFFFF);
+                    int32_t key = ((int32_t(record.column_idx()) & 0xFFFF) << 16) | (int32_t(record.table_idx()) & 0xFFFF);
 
                     // If key already exists  we insert the row index in the vector of the row indexes
                     // else we create a new entry
@@ -225,12 +225,12 @@ namespace Contest
                 // This column contains only int32 entries without null values
                 auto *data_begin = reinterpret_cast<int32_t *>(page->data + 4);
                 int32_t value = data_begin[local_idx];
-                return value_t{
-                    .table_idx = static_cast<uint16_t>(value & 0xFFFF),
-                    .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
-                    .page_idx = 0,
-                    .data_idx = 0xFFFE // INT_VALUE marker
-                };
+                return value_t(
+                    static_cast<uint16_t>(value & 0xFFFF),
+                    static_cast<uint16_t>((value >> 16) & 0xFFFF),
+                    0,
+                    0xFFFE // INT_VALUE marker
+                );
             }
         }
 
@@ -325,13 +325,13 @@ namespace Contest
                 {
                     const value_t &record = value_buffer[i];
                     // If the value is null we skip it
-                    if (record.data_idx == 0xFFFF)
+                    if (record.data_idx() == 0xFFFF)
                     {
                         
                         continue;
                     }
 
-                    key = ((int32_t(record.column_idx) & 0xFFFF) << 16) | (int32_t(record.table_idx) & 0xFFFF);
+                    key = ((int32_t(record.column_idx()) & 0xFFFF) << 16) | (int32_t(record.table_idx()) & 0xFFFF);
                 }
                 else
                 {

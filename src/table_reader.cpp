@@ -14,12 +14,7 @@ namespace helper{
     }
 
     value_t init_null(){
-        value_t record;
-        record.table_idx = 0;
-        record.column_idx = 0;
-        record.page_idx = 0;
-        record.data_idx = NULL_VALUE; 
-        return record;
+        return value_t(0, 0, 0, NULL_VALUE);
     }
 
     inline void ensure_bitmap_size(std::vector<uint8_t>& bitmap, uint16_t idx) {
@@ -68,9 +63,7 @@ std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
                             if (row_idx >= table.num_rows) {
                                 throw std::runtime_error("row_idx");
                             }
-                            results[row_idx][column_idx].data_idx = helper::INT_VALUE; //0xFFFE indicates int, bits will be stored in table and column_idx
-                            results[row_idx][column_idx].table_idx = value & 0xFFFF; //Lower 16 bits of value
-                            results[row_idx][column_idx].column_idx = (value >> 16) & 0xFFFF; //Higher 16 bits of value;
+                            results[row_idx][column_idx] = value_t(value & 0xFFFF, (value >> 16) & 0xFFFF, 0, helper::INT_VALUE);
                             row_idx++;
                         } else {
                             ++row_idx;
@@ -84,10 +77,7 @@ std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
                         if (row_idx >= table.num_rows) {
                             throw std::runtime_error("row_idx");
                         }
-                        results[row_idx][column_idx].table_idx = table_id;
-                        results[row_idx][column_idx].column_idx = in_col_idx;
-                        results[row_idx][column_idx].page_idx = page_idx;
-                        results[row_idx][column_idx].data_idx = 0;
+                        results[row_idx][column_idx] = value_t(table_id, in_col_idx, page_idx, 0);
                         row_idx++;
                     }else if (num_rows != 0xfffe) {
                         auto* bitmap =
@@ -98,10 +88,7 @@ std::vector<std::vector<value_t>> scan_table(const ColumnarTable& table,
                                 if (row_idx >= table.num_rows) {
                                     throw std::runtime_error("row_idx");
                                 }
-                                results[row_idx][column_idx].table_idx = table_id;
-                                results[row_idx][column_idx].column_idx = in_col_idx;
-                                results[row_idx][column_idx].page_idx = page_idx;
-                                results[row_idx][column_idx].data_idx = data_idx;
+                                results[row_idx][column_idx] = value_t(table_id, in_col_idx, page_idx, data_idx);
                                 data_idx++;
                                 row_idx++;
                             } else {
@@ -131,20 +118,20 @@ std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<v
         for(size_t column = 0; column < table[0].size(); column++ ){
             const value_t& entry = table[row][column];
             //If value is null, leave it as monostate
-            if(entry.data_idx == helper::NULL_VALUE){
+            if(entry.data_idx() == helper::NULL_VALUE){
                 continue;
             }
             //If value is int, combine fields and emplace it into result
-            else if (entry.data_idx == helper::INT_VALUE){
+            else if (entry.data_idx() == helper::INT_VALUE){
                 int32_t value =
-                    (static_cast<int32_t>(entry.column_idx) << 16) |
-                    static_cast<int32_t>(entry.table_idx);
+                    (static_cast<int32_t>(entry.column_idx()) << 16) |
+                    static_cast<int32_t>(entry.table_idx());
                 res[row][column].emplace<int32_t>(value);
             }
             //Value is string
             else{
-                uint16_t page_idx = entry.page_idx;
-                auto& page_vector = plan.inputs[entry.table_idx].columns[entry.column_idx].pages;
+                uint16_t page_idx = entry.page_idx();
+                auto& page_vector = plan.inputs[entry.table_idx()].columns[entry.column_idx()].pages;
                 auto* page = page_vector[page_idx++]->data;
                 auto num_rows = *reinterpret_cast<uint16_t*>(page);
                 //Long string handling error
@@ -176,9 +163,9 @@ std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<v
                     auto  num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
                     auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
                     auto* data_begin   = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
-                    auto  old_offset = entry.data_idx ? offset_begin[(entry.data_idx)-1] : 0;
+                    auto  old_offset = entry.data_idx() ? offset_begin[(entry.data_idx())-1] : 0;
                     auto* string_begin = data_begin + old_offset;
-                    auto  offset = offset_begin[entry.data_idx];
+                    auto  offset = offset_begin[entry.data_idx()];
                     
                     std::string value{string_begin, data_begin + offset};
 
@@ -191,8 +178,8 @@ std::vector<std::vector<Data>> materialize_table(const std::vector<std::vector<v
 }
 
 void materialize_string(const value_t string_meta, const Plan& plan, std::string& value){
-    uint16_t page_idx = string_meta.page_idx;
-    auto& page_vector = plan.inputs[string_meta.table_idx].columns[string_meta.column_idx].pages;
+    uint16_t page_idx = string_meta.page_idx();
+    auto& page_vector = plan.inputs[string_meta.table_idx()].columns[string_meta.column_idx()].pages;
     auto* page = page_vector[page_idx++]->data;
     auto num_rows = *reinterpret_cast<uint16_t*>(page);
     //Long string handling error
@@ -219,9 +206,9 @@ void materialize_string(const value_t string_meta, const Plan& plan, std::string
         auto  num_non_null = *reinterpret_cast<uint16_t*>(page + 2);
         auto* offset_begin = reinterpret_cast<uint16_t*>(page + 4);
         auto* data_begin   = reinterpret_cast<char*>(page + 4 + num_non_null * 2);
-        auto  old_offset = string_meta.data_idx ? offset_begin[(string_meta.data_idx)-1] : 0;
+        auto  old_offset = string_meta.data_idx() ? offset_begin[(string_meta.data_idx())-1] : 0;
         auto* string_begin = data_begin + old_offset;
-        auto  offset = offset_begin[string_meta.data_idx];
+        auto  offset = offset_begin[string_meta.data_idx()];
         
         value = std::string{string_begin, data_begin + offset};
     }
@@ -257,16 +244,16 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
             };
             for (auto& record: table) {
                 auto& value = record[col_idx];
-                if (value.data_idx == helper::INT_VALUE) {
+                if (value.data_idx() == helper::INT_VALUE) {
                     if (4 + (data.size() + 1) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
                         save_page();
                     }
                     helper::set_bitmap(bitmap, num_rows);
-                    auto combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |
-                                (int32_t(value.table_idx)  & 0xFFFF);
+                    auto combined_value = ((int32_t(value.column_idx()) & 0xFFFF) << 16) |
+                                (int32_t(value.table_idx())  & 0xFFFF);
                     data.emplace_back(combined_value);
                     ++num_rows;
-                } else if (value.data_idx == helper::NULL_VALUE) {
+                } else if (value.data_idx() == helper::NULL_VALUE) {
                     if (4 + (data.size()) * 4 + (num_rows / 8 + 1) > PAGE_SIZE) {
                         save_page();
                     }
@@ -321,7 +308,7 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
                 auto& string_meta = record[col_idx];
                 
                 
-                if (string_meta.data_idx != helper::NULL_VALUE && string_meta.data_idx != helper::INT_VALUE) {
+                if (string_meta.data_idx() != helper::NULL_VALUE && string_meta.data_idx() != helper::INT_VALUE) {
                     std::string value;
                     materialize_string(string_meta, plan, value);
                     if (value.size() > PAGE_SIZE - 7) {
@@ -340,7 +327,7 @@ ColumnarTable materialize_columnar_table(const std::vector<std::vector<value_t>>
                         offsets.emplace_back(data.size());
                         ++num_rows;
                     }
-                } else if (string_meta.data_idx == helper::NULL_VALUE) {
+                } else if (string_meta.data_idx() == helper::NULL_VALUE) {
                     if (4 + offsets.size() * 2 + data.size() + (num_rows / 8 + 1)
                         > PAGE_SIZE) {
                         save_page();
@@ -446,19 +433,19 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                             if (helper::get_bitmap(bitmap, i)) {
                                 auto value = data_begin[data_idx++];
                 
-                                out_col.insert_value_to_page(value_t{
-                                    .table_idx = static_cast<uint16_t>(value & 0xFFFF),
-                                    .column_idx = static_cast<uint16_t>((value >> 16) & 0xFFFF),
-                                    .page_idx = page_idx,
-                                    .data_idx = helper::INT_VALUE
-                                });
+                                out_col.insert_value_to_page(value_t(
+                                    static_cast<uint16_t>(value & 0xFFFF),
+                                    static_cast<uint16_t>((value >> 16) & 0xFFFF),
+                                    page_idx,
+                                    helper::INT_VALUE
+                                ));
                             } else {
-                                out_col.insert_value_to_page(value_t{
-                                    .table_idx = 0,
-                                    .column_idx = 0,
-                                    .page_idx = page_idx,
-                                    .data_idx = helper::NULL_VALUE
-                                });
+                                out_col.insert_value_to_page(value_t(
+                                    0,
+                                    0,
+                                    page_idx,
+                                    helper::NULL_VALUE
+                                ));
                             }
                             ++row_idx;
                         }
@@ -470,12 +457,12 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                         auto num_rows = *reinterpret_cast<uint16_t*>(page);
                         if (num_rows == 0xffff) {
 
-                            out_col.insert_value_to_page(value_t{
-                                .table_idx = static_cast<uint16_t>(table_id),
-                                .column_idx = static_cast<uint16_t>(in_col_idx),
-                                .page_idx = page_idx,
-                                .data_idx = 0
-                            });
+                            out_col.insert_value_to_page(value_t(
+                                static_cast<uint16_t>(table_id),
+                                static_cast<uint16_t>(in_col_idx),
+                                page_idx,
+                                0
+                            ));
                             ++row_idx;
                         } else if (num_rows != 0xfffe) {
 
@@ -484,20 +471,20 @@ std::vector<column_t> scan_column_table(const ColumnarTable& table,
                             uint16_t data_idx = 0;
                             for (uint16_t i = 0; i < num_rows; ++i) {
                                 if (helper::get_bitmap(bitmap, i)) {
-                                    out_col.insert_value_to_page(value_t{
-                                        .table_idx = static_cast<uint16_t>(table_id),
-                                        .column_idx = static_cast<uint16_t>(in_col_idx),
-                                        .page_idx = page_idx,
-                                        .data_idx = data_idx
-                                    });
-                                    ++data_idx;
+                                    out_col.insert_value_to_page(value_t(
+                                        static_cast<uint16_t>(table_id),
+                                        static_cast<uint16_t>(in_col_idx),
+                                        page_idx,
+                                        data_idx
+                                    ));
+                                    data_idx++;
                                 } else {
-                                    out_col.insert_value_to_page(value_t{
-                                        .table_idx = 0,
-                                        .column_idx = 0,
-                                        .page_idx = page_idx,
-                                        .data_idx = helper::NULL_VALUE
-                                    });
+                                    out_col.insert_value_to_page(value_t(
+                                        0,
+                                        0,
+                                        page_idx,
+                                        helper::NULL_VALUE
+                                    ));
                                 }
                                 ++row_idx;
                             }
@@ -556,11 +543,11 @@ ColumnarTable convert_column_t_to_columnar (
                     for (uint16_t i = 0; i < num_rows; ++i) {
                         const value_t& value = data_begin[i];
                         
-                        if (value.data_idx == helper::NULL_VALUE) {
+                        if (value.data_idx() == helper::NULL_VALUE) {
                             inserter.insert_null();
-                        } else if (value.data_idx == helper::INT_VALUE) {
+                        } else if (value.data_idx() == helper::INT_VALUE) {
                             
-                            int32_t combined_value = ((int32_t(value.column_idx) & 0xFFFF) << 16) |(int32_t(value.table_idx) & 0xFFFF);
+                            int32_t combined_value = ((int32_t(value.column_idx()) & 0xFFFF) << 16) |(int32_t(value.table_idx()) & 0xFFFF);
                             inserter.insert(combined_value);
                         } else {
                             throw std::runtime_error("Invalid data_idx for INT32 column");
@@ -595,9 +582,9 @@ ColumnarTable convert_column_t_to_columnar (
                 for (uint16_t i = 0; i < num_rows; ++i) {
                     const value_t& string_meta = data_begin[i];
                     
-                    if (string_meta.data_idx == helper::NULL_VALUE) {
+                    if (string_meta.data_idx() == helper::NULL_VALUE) {
                         inserter.insert_null();
-                    } else if (string_meta.data_idx != helper::INT_VALUE) {
+                    } else if (string_meta.data_idx() != helper::INT_VALUE) {
                         
                         // Materialize the string from the original source
                         std::string value;
