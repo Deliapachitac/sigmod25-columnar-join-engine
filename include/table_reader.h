@@ -1,12 +1,26 @@
 #include <table.h>
 #include <thread>
+#include <cstdint>
+
+// 64-bit packed value: [table_idx(16) | column_idx(16) |page_idx(16) |data_idx(16)]
+// If data_idx is 0xFFFF then entry is null        
+// If data_idx is 0xFFFE then entry is int and table_idx is the 16 lower bits of the int entry and column_idx is the 16 higher order bits     
 struct value_t{
-    //If data_idx if 0xFFFF then entry is null, if data_idx is 0xFFFE then entry is null and table_idx is the 16 lower bits
-    // of the int entry and column_idx is the 16 higher order bits
-    uint16_t table_idx;
-    uint16_t column_idx;
-    uint16_t page_idx;
-    uint16_t data_idx;
+    uint64_t packed;
+    
+    value_t() : packed(0) {}
+    value_t(uint16_t table, uint16_t column, uint16_t page, uint16_t data) 
+        : packed(((uint64_t)table) | ((uint64_t)column << 16) | ((uint64_t)page << 32) | ((uint64_t)data << 48)) {}
+    
+    uint16_t table_idx() const { return (uint16_t)(packed & 0xFFFF); }
+    uint16_t column_idx() const { return (uint16_t)((packed >> 16) & 0xFFFF); }
+    uint16_t page_idx() const { return (uint16_t)((packed >> 32) & 0xFFFF); }
+    uint16_t data_idx() const { return (uint16_t)((packed >> 48) & 0xFFFF); }
+    
+    void set_table_idx(uint16_t val) { packed = (packed & ~0xFFFFULL) | val; }
+    void set_column_idx(uint16_t val) { packed= (packed & ~0xFFFF0000ULL)|((uint64_t)val << 16); }
+    void set_page_idx(uint16_t val) { packed =(packed & ~0xFFFF00000000ULL) | ((uint64_t)val << 32);}
+    void set_data_idx(uint16_t val) { packed = (packed & ~0xFFFF000000000000ULL) | ((uint64_t)val << 48); }
 };
 
 std::vector<std::vector<value_t>> scan_table(const ColumnarTable& ,
