@@ -2,10 +2,7 @@
 #include <plan.h>
 #include <table.h>
 #include <iostream>
-#include <robin_hood.h>
 #include <table_reader.h>
-#include <cuckoo_hash.h>
-#include <hopscotch.h>
 #include <cstdlib>
 #include <algorithm>
 #include <unchained_hashtable.h>
@@ -51,10 +48,11 @@ namespace Contest
         ExecuteResult &results;
         size_t left_col, right_col;
         const std::vector<std::tuple<size_t, DataType>> &output_attrs;
-
+        size_t threadNum = 8;
         auto run()
         {
-            HashTable hash_table;
+            size_t partitionNum = 32;
+            HashTable hash_table{threadNum, partitionNum};
 
             if (build_left)
             {
@@ -68,15 +66,23 @@ namespace Contest
             // 1. MUST happen on the main thread after extraction threads are joined
             if (hash_table.prepare_build())
             {
-                size_t threadNum = 8;
+                
                 
                 // 2. Spawn workers.
                 std::vector<std::thread> threads;
                 threads.reserve(threadNum);
                 for (size_t i = 0; i < threadNum; ++i)
                 {
-                    // Pass pointers/values explicitly to ensure thread safety
-                    threads.emplace_back(&unchained_ht::post_process_build, &hash_table, i, i);
+                    // Capture 'i' by value [i], and 'this' to access member variables
+                    threads.emplace_back([this, i, partitionNum, &hash_table]()
+                    {
+                        // Use the captured 'i' as the starting offset
+                        for (size_t p_id = i; p_id < partitionNum; p_id += this->threadNum) 
+                        {
+                            // Pass the actual partition ID (p_id) to the function
+                            hash_table.post_process_build(p_id);
+                        } 
+                    });
                 }
 
                 for (auto &t : threads)
@@ -101,7 +107,6 @@ namespace Contest
                 page_offsets[i] = total;
                 total += *reinterpret_cast<uint16_t *>(column.pages[i]->data);
             }
-            size_t threadNum = 8;
             const size_t num_pages = column.pages.size();
 
             // We want  the threads to start processing from page0 

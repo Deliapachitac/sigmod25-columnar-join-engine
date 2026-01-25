@@ -103,7 +103,7 @@ private:
 
 public:
     /* Constructor for size */
-    unchained_ht();
+    unchained_ht(size_t num_threads = 8, size_t num_partitions = 8);
 
     ~unchained_ht();
     /* Insert tuple during build (store in temporary buffer) */
@@ -112,7 +112,7 @@ public:
     /* Finalize: build directory + pack tuples into contiguous array */
     bool prepare_build();
 
-    void post_process_build(size_t tid, size_t partition);
+    void post_process_build (size_t partition);
 
     void finalize_build();
     /* Probe: return vector of matching values for a key */

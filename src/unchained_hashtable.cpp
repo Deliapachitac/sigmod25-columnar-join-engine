@@ -11,14 +11,10 @@
 #include <bitset>
 
 /* Constructor */
-unchained_ht::unchained_ht(): directory_raw(nullptr), array(nullptr), directory(nullptr)
+unchained_ht::unchained_ht(size_t num_threads, size_t num_partitions): directory_raw(nullptr), array(nullptr), directory(nullptr), num_threads(num_threads), num_partitions(num_partitions)
 {
     /* Initialize the tuple count */
     tuple_count = 0;
-
-    /* Initialize the number of threads and partitions */
-    num_threads = 8;
-    num_partitions = 8;
     
     previous_counts = new size_t[num_partitions]{};
     thread_states.reserve(num_threads);
@@ -156,7 +152,7 @@ bool unchained_ht::prepare_build()
     return true;
 }
 
-void unchained_ht::post_process_build(size_t tid, size_t partition){
+void unchained_ht::post_process_build(size_t partition){
     if(isBuilt && tuple_count == 0) return;
     if(!prepared) throw std::runtime_error("Hashtable was not prepared for build!");
     size_t prev_count = previous_counts[partition];
