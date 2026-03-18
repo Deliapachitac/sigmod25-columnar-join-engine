@@ -3,8 +3,7 @@ run-name: Testing join pipeline
 on: [push]
 jobs:
   build-and-test:
-    runs-on:
-      group: k23a
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
