@@ -14,7 +14,7 @@ static void finalize_single_thread(unchained_ht &ht)
     if (ht.prepare_build()) {
         // Step 2: Process all partitions (single-threaded for tests)
         for (size_t p = 0; p < 8; ++p) {
-            ht.post_process_build(0);
+            ht.post_process_build(p);
         }
     }
     // Step 3: Mark as built for probing
